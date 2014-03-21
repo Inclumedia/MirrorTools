@@ -1,0 +1,2 @@
+ALTER TABLE /*$wgDBprefix*/logging
+  AUTO_INCREMENT = 1000000000000001;

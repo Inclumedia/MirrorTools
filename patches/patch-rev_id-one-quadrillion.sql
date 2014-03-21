@@ -1,0 +1,2 @@
+ALTER TABLE /*$wgDBprefix*/revision
+  AUTO_INCREMENT = 1000000000000001;
