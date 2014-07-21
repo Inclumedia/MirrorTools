@@ -35,6 +35,7 @@ class ApiMirrorEditPage extends ApiBase {
 				'Access denied: This user does not have the mirrortools right' );
 		}
 		$params = $this->extractRequestParams();
+		$params['rctitle'] = str_replace( ' ', '_', $params['rctitle'] );
 		// Check sha1
 		$sha = Revision::base36Sha1( $params['oldtext'] );
 		if ( $sha1 != $params['sha1'] ) {
@@ -60,13 +61,16 @@ class ApiMirrorEditPage extends ApiBase {
 			'page_title' => $params['rctitle'],
 			'page_namespace' => $params['rcnamespace'],
 		);
-		$res = $dbw->selectRow( 'page', 'page_id', $conds );
+		$res = $dbw->selectRow( 'page', array( 'page_id', 'page_is_new' )
+			, $conds );
 		$parentId = 0;
 		$childId = 0;
-		$oldLen = 0;
+		$readPageIsNew = 0;
+		$pageIsNew = 0;
 		if ( $res ) { // If so, get that page ID and find what will be the parent and
 			// child revisions. First, the parent revision...
 			$pageId = $res->page_id;
+			$readPageIsNew = $res->page_is_new;
 			$vars = array( 'maxrevtimestamp' => 'MAX(rev_timestamp)', 'rev_id', 'rev_len' );
 			$conds = array(
 				"rev_timestamp < " . $params['revtimestamp'],
@@ -89,6 +93,8 @@ class ApiMirrorEditPage extends ApiBase {
 				$childId = $res->rev_id;
 			}
 		} else { // If not, add a new entry to the page table
+			$pageIsNew = 1;
+			$readPageIsNew = 1;
 			$insertPageArray = array(
 				'page_id' => $params['revpage'],
 				'page_namespace' => $params['rcnamespace'],
@@ -101,7 +107,7 @@ class ApiMirrorEditPage extends ApiBase {
 				'page_random' => wfRandom(),
 				'page_touched' => $params['revtimestamp'],
 				'page_links_updated' => $params['revtimestamp'],
-				'page_latest' => 0,
+				'page_latest' => $params['revid'],
 				'page_len' => $params['revlen'],
 				'page_content_model' => $params['revcontentmodel'],
 				'page_lang' => NULL
@@ -143,6 +149,30 @@ class ApiMirrorEditPage extends ApiBase {
 				array( 'rev_id' => $childId )
 			);
 		}
+		// Update page_latest and/or page_is_new
+		if ( $parentId && !$childId ) {
+			$conds = array(
+				'page_latest' => $params['revid'],
+			);
+			if ( $readPageIsNew ) {
+				$conds['page_is_new'] = 0;
+			}
+			$dbw->update(
+				'page',
+				$conds,
+				array( 'page_id' => $pageId )
+			);
+		// Update page_is_new
+		} else {
+			if ( $readPageIsNew && !$pageIsNew ) {
+				$conds['page_is_new'] = 0;
+			}
+			$dbw->update(
+				'page',
+				$conds,
+				array( 'page_id' => $pageId )
+			);
+		}
 		$insertRecentchangesArray = array(
 			'rc_id' => $params['rcid'],
 			'rc_timestamp' => $params['revtimestamp'],
@@ -154,7 +184,7 @@ class ApiMirrorEditPage extends ApiBase {
 			'rc_minor' => $params['revminoredit'],
 			'rc_bot' => $params['rcbot'],
 			'rc_new' => $params['rcnew'],
-			'rc_cur_id' => $params['revpage'],
+			'rc_cur_id' => $pageId,
 			'rc_this_oldid' => $params['revid'],
 			'rc_last_oldid' => $parentId,
 			'rc_type' => $params['rctype'],

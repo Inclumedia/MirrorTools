@@ -9,9 +9,6 @@ class SpecialDeleteMirrored extends SpecialPage {
 		$output = $this->getOutput();
 		$this->setHeaders();
  
-		# Get request data from, e.g.
-		$param = $request->getText( 'param' );
- 
 		$wikitext = '';
 		$dbw = wfGetDB( DB_MASTER );
 		$vars = array( 'rev_mt_page', 'rev_page', 'rev_text_id' );
