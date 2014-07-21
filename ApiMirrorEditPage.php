@@ -163,10 +163,8 @@ class ApiMirrorEditPage extends ApiBase {
 				array( 'page_id' => $pageId )
 			);
 		// Update page_is_new
-		} else {
-			if ( $readPageIsNew && !$pageIsNew ) {
-				$conds['page_is_new'] = 0;
-			}
+		} elseif ( $readPageIsNew && !$pageIsNew ) {
+			$conds['page_is_new'] = 0;
 			$dbw->update(
 				'page',
 				$conds,
