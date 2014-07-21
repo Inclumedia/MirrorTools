@@ -2,7 +2,7 @@
 /**
  *
  * ApiMirrorEditPage
- * Created on 24 February 2014 by Nathan Larson, based on the August 16, 2007 work of Iker Labarga
+ * Created on 17 July 2014 by Nathan Larson
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,670 +23,290 @@
  */
 
 /**
- * A module that allows for editing and creating pages.
+ * A module that allows for creating users.
  *
- * Currently, this wraps around the EditPage class in an ugly way,
- * EditPage.php should be rewritten to provide a cleaner interface
  * @ingroup API
  */
 class ApiMirrorEditPage extends ApiBase {
 	public function execute() {
 		$user = $this->getUser();
+		if ( !$user->isAllowed( 'mirrortools' ) ) {
+			$this->dieUsage(
+				'Access denied: This user does not have the mirrortools right' );
+		}
 		$params = $this->extractRequestParams();
-
-		if ( is_null( $params['text'] ) && is_null( $params['appendtext'] ) &&
-			is_null( $params['prependtext'] ) &&
-			$params['undo'] == 0
-		) {
-			$this->dieUsageMsg( 'missingtext' );
+		// Check sha1
+		$sha = Revision::base36Sha1( $params['oldtext'] );
+		if ( $sha1 != $params['sha1'] ) {
+			$this->dieUsage( "sha1 does not match. Submitted: " . $params['revsha1']
+				. "Should have been: $sha1" );
 		}
-
-		$pageObj = $this->getTitleOrPageId( $params );
-		$titleObj = $pageObj->getTitle();
-		$apiResult = $this->getResult();
-
-		if ( $params['redirect'] ) {
-			if ( $titleObj->isRedirect() ) {
-				$oldTitle = $titleObj;
-
-				$titles = Revision::newFromTitle( $oldTitle, false, Revision::READ_LATEST )
-					->getContent( Revision::FOR_THIS_USER, $user )
-					->getRedirectChain();
-				// array_shift( $titles );
-
-				$redirValues = array();
-
-				/** @var $newTitle Title */
-				foreach ( $titles as $id => $newTitle ) {
-
-					if ( !isset( $titles[$id - 1] ) ) {
-						$titles[$id - 1] = $oldTitle;
-					}
-
-					$redirValues[] = array(
-						'from' => $titles[$id - 1]->getPrefixedText(),
-						'to' => $newTitle->getPrefixedText()
-					);
-
-					$titleObj = $newTitle;
-				}
-
-				$apiResult->setIndexedTagName( $redirValues, 'r' );
-				$apiResult->addValue( null, 'redirects', $redirValues );
-
-				// Since the page changed, update $pageObj
-				$pageObj = WikiPage::factory( $titleObj );
-			}
+		$dbw = wfGetDB( DB_MASTER );
+		// See if this data is already in the tables
+		$conds = array ( 'rev_id' => $params['revid'] );
+		$res = $dbw->selectRow( 'revision', 'rev_id', $conds );
+		if ( $res ) {
+			$this->dieUsage( 'Rev id ' . $params['revid'] .
+				' is already in the revision table' );
 		}
-
-		if ( !isset( $params['contentmodel'] ) || $params['contentmodel'] == '' ) {
-			$contentHandler = $pageObj->getContentHandler();
-		} else {
-			$contentHandler = ContentHandler::getForModelID( $params['contentmodel'] );
+		$conds = array ( 'rc_id' => $params['rcid'] );
+		$res = $dbw->selectRow( 'recentchanges', 'rc_id', $conds );
+		if ( $res ) {
+			$this->dieUsage( 'Rc id ' . $params['rcid'] .
+				' is already in the recentchanges table' );
 		}
-
-		// @todo Ask handler whether direct editing is supported at all! make
-		// allowFlatEdit() method or some such
-
-		if ( !isset( $params['contentformat'] ) || $params['contentformat'] == '' ) {
-			$params['contentformat'] = $contentHandler->getDefaultFormat();
-		}
-
-		$contentFormat = $params['contentformat'];
-
-		if ( !$contentHandler->isSupportedFormat( $contentFormat ) ) {
-			$name = $titleObj->getPrefixedDBkey();
-			$model = $contentHandler->getModelID();
-
-			$this->dieUsage( "The requested format $contentFormat is not supported for content model " .
-				" $model used by $name", 'badformat' );
-		}
-
-		if ( $params['createonly'] && $titleObj->exists() ) {
-			$this->dieUsageMsg( 'createonly-exists' );
-		}
-		if ( $params['nocreate'] && !$titleObj->exists() ) {
-			$this->dieUsageMsg( 'nocreate-missing' );
-		}
-
-		// Now let's check whether we're even allowed to do this
-		$errors = $titleObj->getUserPermissionsErrors( 'edit', $user );
-		if ( !$titleObj->exists() ) {
-			$errors = array_merge( $errors, $titleObj->getUserPermissionsErrors( 'create', $user ) );
-		}
-		if ( count( $errors ) ) {
-			$this->dieUsageMsg( $errors[0] );
-		}
-
-		$toMD5 = $params['text'];
-		if ( !is_null( $params['appendtext'] ) || !is_null( $params['prependtext'] ) ) {
-			$content = $pageObj->getContent();
-
-			if ( !$content ) {
-				if ( $titleObj->getNamespace() == NS_MEDIAWIKI ) {
-					# If this is a MediaWiki:x message, then load the messages
-					# and return the message value for x.
-					$text = $titleObj->getDefaultMessageText();
-					if ( $text === false ) {
-						$text = '';
-					}
-
-					try {
-						$content = ContentHandler::makeContent( $text, $this->getTitle() );
-					} catch ( MWContentSerializationException $ex ) {
-						$this->dieUsage( $ex->getMessage(), 'parseerror' );
-
-						return;
-					}
-				} else {
-					# Otherwise, make a new empty content.
-					$content = $contentHandler->makeEmptyContent();
-				}
-			}
-
-			// @todo Add support for appending/prepending to the Content interface
-
-			if ( !( $content instanceof TextContent ) ) {
-				$mode = $contentHandler->getModelID();
-				$this->dieUsage( "Can't append to pages using content model $mode", 'appendnotsupported' );
-			}
-
-			if ( !is_null( $params['section'] ) ) {
-				if ( !$contentHandler->supportsSections() ) {
-					$modelName = $contentHandler->getModelID();
-					$this->dieUsage(
-						"Sections are not supported for this content model: $modelName.",
-						'sectionsnotsupported'
-					);
-				}
-
-				if ( $params['section'] == 'new' ) {
-					// DWIM if they're trying to prepend/append to a new section.
-					$content = null;
-				} else {
-					// Process the content for section edits
-					$section = intval( $params['section'] );
-					$content = $content->getSection( $section );
-
-					if ( !$content ) {
-						$this->dieUsage( "There is no section {$section}.", 'nosuchsection' );
-					}
-				}
-			}
-
-			if ( !$content ) {
-				$text = '';
-			} else {
-				$text = $content->serialize( $contentFormat );
-			}
-
-			$params['text'] = $params['prependtext'] . $text . $params['appendtext'];
-			$toMD5 = $params['prependtext'] . $params['appendtext'];
-		}
-
-		if ( $params['undo'] > 0 ) {
-			if ( $params['undoafter'] > 0 ) {
-				if ( $params['undo'] < $params['undoafter'] ) {
-					list( $params['undo'], $params['undoafter'] ) =
-						array( $params['undoafter'], $params['undo'] );
-				}
-				$undoafterRev = Revision::newFromID( $params['undoafter'] );
-			}
-			$undoRev = Revision::newFromID( $params['undo'] );
-			if ( is_null( $undoRev ) || $undoRev->isDeleted( Revision::DELETED_TEXT ) ) {
-				$this->dieUsageMsg( array( 'nosuchrevid', $params['undo'] ) );
-			}
-
-			if ( $params['undoafter'] == 0 ) {
-				$undoafterRev = $undoRev->getPrevious();
-			}
-			if ( is_null( $undoafterRev ) || $undoafterRev->isDeleted( Revision::DELETED_TEXT ) ) {
-				$this->dieUsageMsg( array( 'nosuchrevid', $params['undoafter'] ) );
-			}
-
-			if ( $undoRev->getPage() != $pageObj->getID() ) {
-				$this->dieUsageMsg( array( 'revwrongpage', $undoRev->getID(),
-					$titleObj->getPrefixedText() ) );
-			}
-			if ( $undoafterRev->getPage() != $pageObj->getID() ) {
-				$this->dieUsageMsg( array( 'revwrongpage', $undoafterRev->getID(),
-					$titleObj->getPrefixedText() ) );
-			}
-
-			$newContent = $contentHandler->getUndoContent(
-				$pageObj->getRevision(),
-				$undoRev,
-				$undoafterRev
-			);
-
-			if ( !$newContent ) {
-				$this->dieUsageMsg( 'undo-failure' );
-			}
-
-			$params['text'] = $newContent->serialize( $params['contentformat'] );
-
-			// If no summary was given and we only undid one rev,
-			// use an autosummary
-			if ( is_null( $params['summary'] ) &&
-				$titleObj->getNextRevisionID( $undoafterRev->getID() ) == $params['undo']
-			) {
-				$params['summary'] = wfMessage( 'undo-summary' )
-					->params ( $params['undo'], $undoRev->getUserText() )->inContentLanguage()->text();
-			}
-		}
-
-		// See if the MD5 hash checks out
-		if ( !is_null( $params['md5'] ) && md5( $toMD5 ) !== $params['md5'] ) {
-			$this->dieUsageMsg( 'hashcheckfailed' );
-		}
-
-		// EditPage wants to parse its stuff from a WebRequest
-		// That interface kind of sucks, but it's workable
-		$requestArray = array(
-			'wpTextbox1' => $params['text'],
-			'format' => $contentFormat,
-			'model' => $contentHandler->getModelID(),
-			'wpEditToken' => $params['token'],
-			'wpIgnoreBlankSummary' => ''
+		// See if this page title and namespace are in the page table
+		$conds = array (
+			'page_title' => $params['rctitle'],
+			'page_namespace' => $params['rcnamespace'],
 		);
-
-		if ( !is_null( $params['summary'] ) ) {
-			$requestArray['wpSummary'] = $params['summary'];
-		}
-
-		if ( !is_null( $params['sectiontitle'] ) ) {
-			$requestArray['wpSectionTitle'] = $params['sectiontitle'];
-		}
-
-		// TODO: Pass along information from 'undoafter' as well
-		if ( $params['undo'] > 0 ) {
-			$requestArray['wpUndidRevision'] = $params['undo'];
-		}
-
-		// Watch out for basetimestamp == ''
-		// wfTimestamp() treats it as NOW, almost certainly causing an edit conflict
-		if ( !is_null( $params['basetimestamp'] ) && $params['basetimestamp'] != '' ) {
-			$requestArray['wpEdittime'] = wfTimestamp( TS_MW, $params['basetimestamp'] );
-		} else {
-			$requestArray['wpEdittime'] = $pageObj->getTimestamp();
-		}
-
-		if ( !is_null( $params['starttimestamp'] ) && $params['starttimestamp'] != '' ) {
-			$requestArray['wpStarttime'] = wfTimestamp( TS_MW, $params['starttimestamp'] );
-		} else {
-			$requestArray['wpStarttime'] = wfTimestampNow(); // Fake wpStartime
-		}
-
-		if ( $params['minor'] || ( !$params['notminor'] && $user->getOption( 'minordefault' ) ) ) {
-			$requestArray['wpMinoredit'] = '';
-		}
-
-		if ( $params['recreate'] ) {
-			$requestArray['wpRecreate'] = '';
-		}
-
-		if ( !is_null( $params['section'] ) ) {
-			$section = intval( $params['section'] );
-			if ( $section == 0 && $params['section'] != '0' && $params['section'] != 'new' ) {
-				$this->dieUsage( "The section parameter must be set to an integer or 'new'", "invalidsection" );
-			}
-			$content = $pageObj->getContent();
-			if ( $section !== 0 && ( !$content || !$content->getSection( $section ) ) ) {
-				$this->dieUsage( "There is no section {$section}.", 'nosuchsection' );
-			}
-			$requestArray['wpSection'] = $params['section'];
-		} else {
-			$requestArray['wpSection'] = '';
-		}
-
-		$watch = $this->getWatchlistValue( $params['watchlist'], $titleObj );
-
-		// Deprecated parameters
-		if ( $params['watch'] ) {
-			$watch = true;
-		} elseif ( $params['unwatch'] ) {
-			$watch = false;
-		}
-
-		if ( $watch ) {
-			$requestArray['wpWatchthis'] = '';
-		}
-
-		// Pass through anything else we might have been given, to support extensions
-		// This is kind of a hack but it's the best we can do to make extensions work
-		$requestArray += $this->getRequest()->getValues();
-
-		global $wgTitle, $wgRequest;
-
-		$req = new DerivativeRequest( $this->getRequest(), $requestArray, true );
-
-		// Some functions depend on $wgTitle == $ep->mTitle
-		// TODO: Make them not or check if they still do
-		$wgTitle = $titleObj;
-
-		$articleContext = new RequestContext;
-		$articleContext->setRequest( $req );
-		$articleContext->setWikiPage( $pageObj );
-		$articleContext->setUser( $this->getUser() );
-
-		/** @var $articleObject Article */
-		$articleObject = Article::newFromWikiPage( $pageObj, $articleContext );
-
-		$ep = new EditPage( $articleObject );
-
-		// allow editing of non-textual content.
-		$ep->allowNonTextContent = true;
-
-		$ep->setContextTitle( $titleObj );
-		$ep->importFormData( $req );
-		$content = $ep->textbox1;
-
-		// The following is needed to give the hook the full content of the
-		// new revision rather than just the current section. (Bug 52077)
-		if ( !is_null( $params['section'] ) &&
-			$contentHandler->supportsSections() && $titleObj->exists()
-		) {
-			// If sectiontitle is set, use it, otherwise use the summary as the section title (for
-			// backwards compatibility with old forms/bots).
-			if ( $ep->sectiontitle !== '' ) {
-				$sectionTitle = $ep->sectiontitle;
-			} else {
-				$sectionTitle = $ep->summary;
-			}
-
-			$contentObj = $contentHandler->unserializeContent( $content, $contentFormat );
-
-			$fullContentObj = $articleObject->replaceSectionContent(
-				$params['section'],
-				$contentObj,
-				$sectionTitle
+		$res = $dbw->selectRow( 'page', 'page_id', $conds );
+		$parentId = 0;
+		$childId = 0;
+		$oldLen = 0;
+		if ( $res ) { // If so, get that page ID and find what will be the parent and
+			// child revisions. First, the parent revision...
+			$pageId = $res->page_id;
+			$vars = array( 'maxrevtimestamp' => 'MAX(rev_timestamp)', 'rev_id', 'rev_len' );
+			$conds = array(
+				"rev_timestamp < " . $params['revtimestamp'],
+				'rev_page' => $pageId
 			);
-			if ( $fullContentObj ) {
-				$content = $fullContentObj->serialize( $contentFormat );
-			} else {
-				// This most likely means we have an edit conflict which means that the edit
-				// wont succeed anyway.
-				$this->dieUsageMsg( 'editconflict' );
+			$res = $dbw->selectRow( 'revision', $vars, $conds );
+			
+			if ( $res ) {
+				$parentId = $res->rev_id;
+				$oldLen = $res->rev_len;
 			}
+			// Now, the child revision...
+			$vars = array( 'minrevtimestamp' => 'MIN(rev_timestamp)', 'rev_id' );
+			$conds = array(
+				"rev_timestamp > " . $params['revtimestamp'],
+				'rev_page' => $pageId
+			);
+			$res = $dbw->selectRow( 'revision', $vars, $conds );
+			if ( $res ) {
+				$childId = $res->rev_id;
+			}
+		} else { // If not, add a new entry to the page table
+			$insertPageArray = array(
+				'page_id' => $params['revpage'],
+				'page_namespace' => $params['rcnamespace'],
+				'page_title' => $params['rctitle'],
+				'page_counter' => 0,
+				// TODO: Perhaps fix this using WikitextContent's
+				// getRedirectTargetAndText()
+				'page_is_redirect' => 0,
+				'page_is_new' => 1,
+				'page_random' => wfRandom(),
+				'page_touched' => $params['revtimestamp'],
+				'page_links_updated' => $params['revtimestamp'],
+				'page_latest' => 0,
+				'page_len' => $params['revlen'],
+				'page_content_model' => $params['revcontentmodel'],
+				'page_lang' => NULL
+			);
+			$dbw->insert( 'page', $insertPageArray );
+			$pageId = $dbw->insertId();
 		}
-
-		// Run hooks
-		// Handle APIEditBeforeSave parameters
+		$insertTextArray = array(
+			'old_text' => $params['oldtext'],
+			'old_flags' => $params['oldflags']
+		);
+		$dbw->insert( 'text', $insertTextArray );
+		$oldId = $dbw->insertId();
+		$insertRevisionArray = array(
+			'rev_id' => $params['revid'],
+			'rev_page' => $pageId,
+			'rev_text_id' => $oldId,
+			'rev_comment' => $params['revcomment'],
+			'rev_user' => 0,
+			'rev_user_text' => $params['revusertext'],
+			'rev_timestamp' => $params['revtimestamp'],
+			'rev_minor_edit' => $params['revminoredit'],
+			'rev_deleted' => $params['revdeleted'],
+			'rev_len' => $params['revlen'],
+			'rev_parent_id' => $parentId,
+			'rev_sha1' => $params['revsha1'],
+			'rev_content_model' => $params['revcontentmodel'],
+			'rev_content_format' => $params['revcontentformat'],
+			'rev_mt_page' => $params['revpage'],
+			'rev_mt_user' => $params['revuser']
+		);
+		$dbw->insert( 'revision', $insertRevisionArray );
+		$revId = $dbw->insertId();
+		// Change the child revision to point to this one
+		if ( $childId ) {
+			$dbw->update(
+				'revision',
+				array( 'rev_parent_id' => $revId ),
+				array( 'rev_id' => $childId )
+			);
+		}
+		$insertRecentchangesArray = array(
+			'rc_id' => $params['rcid'],
+			'rc_timestamp' => $params['revtimestamp'],
+			'rc_user' => 0,
+			'rc_user_text' => $params['revusertext'],
+			'rc_namespace' => $params['rcnamespace'],
+			'rc_title' => $params['rctitle'],
+			'rc_comment' => $params['revcomment'],
+			'rc_minor' => $params['revminoredit'],
+			'rc_bot' => $params['rcbot'],
+			'rc_new' => $params['rcnew'],
+			'rc_cur_id' => $params['revpage'],
+			'rc_this_oldid' => $params['revid'],
+			'rc_last_oldid' => $parentId,
+			'rc_type' => $params['rctype'],
+			'rc_source' => $params['rcsource'],
+			'rc_patrolled' => $params['rcpatrolled'],
+			'rc_ip' => $params['rcip'],
+			'rc_old_len' => $oldLen,
+			'rc_new_len' => $params['revlen'],
+			'rc_deleted' => $params['revdeleted'],
+			'rc_logid' => 0,
+			'rc_log_type' => NULL,
+			'rc_log_action' => '',
+			'rc_params' => ''
+		);
+		$dbw->insert( 'recentchanges', $insertRecentchangesArray );
+		if ( $params['tstags'] ) {
+			$insertTagsummaryArray = array(
+				'ts_rc_id' => $params['rcid'],
+				'ts_rev_id' => $params['revid'],
+				'ts_tags' => $params['tags']
+			);
+			$dbw->insert( 'tag_summary', $insertTagsummaryArray );
+		}
 		$r = array();
-		if ( !wfRunHooks( 'APIEditBeforeSave', array( $ep, $content, &$r, $params ) ) ) { // Leucosticte: Added $params!
-			if ( count( $r ) ) {
-				$r['result'] = 'Failure';
-				$apiResult->addValue( null, $this->getModuleName(), $r );
-
-				return;
-			}
-
-			$this->dieUsageMsg( 'hookaborted' );
-		}
-
-		// Do the actual save
-		$oldRevId = $articleObject->getRevIdFetched();
-		$result = null;
-		// Fake $wgRequest for some hooks inside EditPage
-		// @todo FIXME: This interface SUCKS
-		$oldRequest = $wgRequest;
-		$wgRequest = $req;
-
-		$status = $ep->internalAttemptSave( $result, $user->isAllowed( 'bot' ) && $params['bot'] );
-		$wgRequest = $oldRequest;
-		global $wgMaxArticleSize;
-
-		switch ( $status->value ) {
-			case EditPage::AS_HOOK_ERROR:
-			case EditPage::AS_HOOK_ERROR_EXPECTED:
-				$this->dieUsageMsg( 'hookaborted' );
-
-			case EditPage::AS_PARSE_ERROR:
-				$this->dieUsage( $status->getMessage(), 'parseerror' );
-
-			case EditPage::AS_IMAGE_REDIRECT_ANON:
-				$this->dieUsageMsg( 'noimageredirect-anon' );
-
-			case EditPage::AS_IMAGE_REDIRECT_LOGGED:
-				$this->dieUsageMsg( 'noimageredirect-logged' );
-
-			case EditPage::AS_SPAM_ERROR:
-				$this->dieUsageMsg( array( 'spamdetected', $result['spam'] ) );
-
-			case EditPage::AS_BLOCKED_PAGE_FOR_USER:
-				$this->dieUsageMsg( 'blockedtext' );
-
-			case EditPage::AS_MAX_ARTICLE_SIZE_EXCEEDED:
-			case EditPage::AS_CONTENT_TOO_BIG:
-				$this->dieUsageMsg( array( 'contenttoobig', $wgMaxArticleSize ) );
-
-			case EditPage::AS_READ_ONLY_PAGE_ANON:
-				$this->dieUsageMsg( 'noedit-anon' );
-
-			case EditPage::AS_READ_ONLY_PAGE_LOGGED:
-				$this->dieUsageMsg( 'noedit' );
-
-			case EditPage::AS_READ_ONLY_PAGE:
-				$this->dieReadOnly();
-
-			case EditPage::AS_RATE_LIMITED:
-				$this->dieUsageMsg( 'actionthrottledtext' );
-
-			case EditPage::AS_ARTICLE_WAS_DELETED:
-				$this->dieUsageMsg( 'wasdeleted' );
-
-			case EditPage::AS_NO_CREATE_PERMISSION:
-				$this->dieUsageMsg( 'nocreate-loggedin' );
-
-			case EditPage::AS_BLANK_ARTICLE:
-				$this->dieUsageMsg( 'blankpage' );
-
-			case EditPage::AS_CONFLICT_DETECTED:
-				$this->dieUsageMsg( 'editconflict' );
-
-			// case EditPage::AS_SUMMARY_NEEDED: Can't happen since we set wpIgnoreBlankSummary
-			case EditPage::AS_TEXTBOX_EMPTY:
-				$this->dieUsageMsg( 'emptynewsection' );
-
-			case EditPage::AS_SUCCESS_NEW_ARTICLE:
-				$r['new'] = '';
-				// fall-through
-
-			case EditPage::AS_SUCCESS_UPDATE:
-				$r['result'] = 'Success';
-				$r['pageid'] = intval( $titleObj->getArticleID() );
-				$r['title'] = $titleObj->getPrefixedText();
-				$r['contentmodel'] = $titleObj->getContentModel();
-				$newRevId = $articleObject->getLatest();
-				if ( $newRevId == $oldRevId ) {
-					$r['nochange'] = '';
-				} else {
-					$r['oldrevid'] = intval( $oldRevId );
-					$r['newrevid'] = intval( $newRevId );
-					$r['newtimestamp'] = wfTimestamp( TS_ISO_8601,
-						$pageObj->getTimestamp() );
-				}
-				break;
-
-			case EditPage::AS_SUMMARY_NEEDED:
-				$this->dieUsageMsg( 'summaryrequired' );
-
-			case EditPage::AS_END:
-			default:
-				// $status came from WikiPage::doEdit()
-				$errors = $status->getErrorsArray();
-				$this->dieUsageMsg( $errors[0] ); // TODO: Add new errors to message map
-				break;
-		}
-		$apiResult->addValue( null, $this->getModuleName(), $r );
+		$r['result'] = 'Success';
+		$r['timestamp'] = wfTimestamp( TS_MW );
+		$this->getResult()->addValue( null, $this->getModuleName(), $r );
+		return true;
 	}
 
 	public function getDescription() {
-		return 'Mirror the creation and editing of pages.';
+		return 'Mirror log entries.';
 	}
 
 	public function getAllowedParams() {
 		return array(
-			'title' => array(
-				ApiBase::PARAM_TYPE => 'string',
-                                ApiBase::PARAM_REQUIRED => true
-			),
-                        'namespace' => array(
+			'revid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
-                                ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'pageid' => array(
+			'revpage' => array(
 				ApiBase::PARAM_TYPE => 'integer',
-                                ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'section' => null,
-			'sectiontitle' => array(
+			'revcomment' => array(
 				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
 			),
-			'text' => null,
-			'token' => array(
+			'revuser' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'revusertext' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_REQUIRED => true
 			),
-			'summary' => null,
-			'minor' => false,
-			'notminor' => false,
-			'bot' => false,
-			'basetimestamp' => null,
-			'starttimestamp' => null,
-			'recreate' => false,
-			'createonly' => false,
-			'nocreate' => false,
-			'watch' => array(
-				ApiBase::PARAM_DFLT => false,
-				ApiBase::PARAM_DEPRECATED => true,
+			'revtimestamp' => array(
+				ApiBase::PARAM_TYPE => 'timestamp',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'unwatch' => array(
-				ApiBase::PARAM_DFLT => false,
-				ApiBase::PARAM_DEPRECATED => true,
+			'revminoredit' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'watchlist' => array(
-				ApiBase::PARAM_DFLT => 'preferences',
-				ApiBase::PARAM_TYPE => array(
-					'watch',
-					'unwatch',
-					'preferences',
-					'nochange'
-				),
+			'revdeleted' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'md5' => null,
-			'prependtext' => null,
-			'appendtext' => null,
-			'undo' => array(
-				ApiBase::PARAM_TYPE => 'integer'
+			'revlen' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'undoafter' => array(
-				ApiBase::PARAM_TYPE => 'integer'
+			'revsha1' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'redirect' => array(
-				ApiBase::PARAM_TYPE => 'boolean',
-				ApiBase::PARAM_DFLT => false,
+			'revcontentmodel' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'contentformat' => array(
-				ApiBase::PARAM_TYPE => ContentHandler::getAllContentFormats(),
+			'revcontentformat' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
 			),
-			'contentmodel' => array(
-				ApiBase::PARAM_TYPE => ContentHandler::getContentModels(),
+			'rcid' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
 			),
-                        'rcid' => array(
-                            ApiBase::PARAM_TYPE => 'integer',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-                        'revid' => array(
-                            ApiBase::PARAM_TYPE => 'integer',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-                        'tags' => array(
-                            ApiBase::PARAM_TYPE => 'string'
-                        ),
-                        'timestamp' => array(
-                            ApiBase::PARAM_TYPE => 'timestamp',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-                        'user' => array(
-                            ApiBase::PARAM_TYPE => 'string',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-                        'userid' => array(
-                            ApiBase::PARAM_TYPE => 'integer',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-                        'user' => array(
-                            ApiBase::PARAM_TYPE => 'string',
-                            ApiBase::PARAM_REQUIRED => true
-                        ),
-		);
-	}
-
-	public function getParamDescription() {
-		$p = $this->getModulePrefix();
-
-		return array(
-			'title' => "Title of the page you want to edit. Cannot be used together with {$p}pageid",
-			'pageid' => "Page ID of the page you want to edit. Cannot be used together with {$p}title",
-			'section' => 'Section number. 0 for the top section, \'new\' for a new section',
-			'sectiontitle' => 'The title for a new section',
-			'text' => 'Page content',
+			'rcnamespace' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rctitle' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcbot' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcnew' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rctype' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcsource' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
+			),
+			'rcpatrolled' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcip' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
+			),
+			'oldtext' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'oldflags' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => 'utf-8'
+			),
+			'tstags' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
+			),
 			'token' => array(
-				'Edit token. You can get one of these through prop=info.',
-				"The token should always be sent as the last parameter, or at " .
-					"least, after the {$p}text parameter"
-			),
-			'summary'
-				=> "Edit summary. Also section title when {$p}section=new and {$p}sectiontitle is not set",
-			'minor' => 'Minor edit',
-			'notminor' => 'Non-minor edit',
-			'bot' => 'Mark this edit as bot',
-			'basetimestamp' => array(
-				'Timestamp of the base revision (obtained through prop=revisions&rvprop=timestamp).',
-				'Used to detect edit conflicts; leave unset to ignore conflicts'
-			),
-			'starttimestamp' => array(
-				'Timestamp when you obtained the edit token.',
-				'Used to detect edit conflicts; leave unset to ignore conflicts'
-			),
-			'recreate' => 'Override any errors about the article having been deleted in the meantime',
-			'createonly' => 'Don\'t edit the page if it exists already',
-			'nocreate' => 'Throw an error if the page doesn\'t exist',
-			'watch' => 'Add the page to your watchlist',
-			'unwatch' => 'Remove the page from your watchlist',
-			'watchlist' => 'Unconditionally add or remove the page from your ' .
-				'watchlist, use preferences or do not change watch',
-			'md5' => array(
-				"The MD5 hash of the {$p}text parameter, or the {$p}prependtext " .
-					"and {$p}appendtext parameters concatenated.",
-				'If set, the edit won\'t be done unless the hash is correct'
-			),
-			'prependtext' => "Add this text to the beginning of the page. Overrides {$p}text",
-			'appendtext' => array( "Add this text to the end of the page. Overrides {$p}text.",
-				"Use {$p}section=new to append a new section" ),
-			'undo' => "Undo this revision. Overrides {$p}text, {$p}prependtext and {$p}appendtext",
-			'undoafter' => 'Undo all revisions from undo to this one. If not set, just undo one revision',
-			'redirect' => 'Automatically resolve redirects',
-			'contentformat' => 'Content serialization format used for the input text',
-			'contentmodel' => 'Content model of the new content',
-                        'pageid' => 'Page ID from the remote wiki',
-                        'revid' => 'Revision ID from the remote wiki',
-                        'rcid' => 'Recent change ID from the remote wiki',
-                        'userid' => 'User ID from the remote wiki',
-                        'user' => 'User text from the remote wiki',
-                        'tags' => 'Tags from the remote wiki',
-                        'timestamp' => 'Timestamp of when the edit was made on the remote wiki'
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true
+			)
 		);
 	}
-
-        // TODO: Examples. Get them from ApiEditPage.php
 
 	public function getHelpUrls() {
-		return 'https://www.mediawiki.org/wiki/Extension:MirrorTools/MirrorEdit';
-	}
-
-    	/**
-	 * @param $params array
-	 * @param bool|string $load Whether load the object's state from the database:
-	 *        - false: don't load (if the pageid is given, it will still be loaded)
-	 *        - 'fromdb': load from a slave database
-	 *        - 'fromdbmaster': load from the master database
-	 * @return WikiPage
-	 */
-	public function getTitleOrPageId( $params, $load = 'fromdbmaster' ) {
-		$pageObj = null;
-                if ( $load === false ) {
-                        $load = 'fromdb';
-                }
-                // If the page can be loaded from that page ID, then do so
-                $pageObj = WikiPage::newFromID( $params['pageid'], $load );
-                if ( $pageObj ) {
-                    return $pageObj;
-                }
-
-                // The page couldn't be loaded from the page ID, so see what happens when we try
-                // to load from that title. If it exists elsewhere, throw an error (TODO: it
-                // should instead move all that content to this page). If it doesn't, just
-                // return a null
-                $titleObj = Title::newFromText( $params['title'] );
-                if ( !$titleObj || $titleObj->isExternal() ) {
-                        $this->dieUsageMsg( array( 'invalidtitle', $params['title'] ) );
-                }
-                if ( !$titleObj->canExist() ) {
-                        $this->dieUsage( "Namespace doesn't allow actual pages", 'pagecannotexist' );
-                }
-                $pageObj = WikiPage::factory( $titleObj );
-                $pageObj->loadPageData( $load );
-                if ( $pageObj->exists() ) {
-                        // TODO: Replace this dieUsage with collision handling (see above)
-                        $this->dieUsage( "This page title already exists", 'pageexistsnow' );
-                        $pageObj->loadPageData( $load );
-                }
-                return $pageObj;
+		return 'https://www.mediawiki.org/wiki/Extension:MirrorTools/MirrorLogEntry';
 	}
 
 	public function mustBePosted() {
 		return true;
+	}
+	
+	public function needsToken() {
+		return true;
+	}
+	
+	public function getTokenSalt() {
+		return '';
 	}
 }

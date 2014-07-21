@@ -4,14 +4,14 @@
 *
 * This extension facilitates real-time mirroring of page histories.
 *
-* @version 1.0.0 - 2014-01-21
+* @version 1.0.2 - 2014-07-18
 *
-* @link https://www.mediawiki.org/wiki/Extension:AllowInternetArchiver Documentation
-* @link https://www.mediawiki.org/wiki/Extension_talk:AllowInternetArchiver Support
-* @link https://github.com/Inclumedia/AllowInternetArchiver Source Code
+* @link https://www.mediawiki.org/wiki/Extension:Mirrortools Documentation
+* @link https://www.mediawiki.org/wiki/Extension_talk:MirrorTools Support
+* @link https://github.com/Inclumedia/MirrorTools Source Code
 *
 * @license https://www.gnu.org/licenses/gpl-3.0.en.html GNU General Public License 3.0 or later
-* @author Nathon Larson (Leucosticte)
+* @author Nathan Larson (Leucosticte)
 */
 
 /* Alert the user that this is not a valid entry point to MediaWiki if they try to access the
@@ -36,14 +36,15 @@ $wgExtensionCredits['other'][] = array(
 $wgExtensionMessagesFiles['MirrorTools'] = __DIR__ . '/MirrorTools.i18n.php';
 $wgAutoloadClasses['MirrorTools'] = __DIR__ . '/MirrorTools.classes.php';
 $wgAutoloadClasses['ApiMirrorEditPage'] = __DIR__ . '/ApiMirrorEditPage.php';
-$wgAutoloadClasses['ApiMirrorCreateUser'] = __DIR__ . '/ApiMirrorCreateUser.php';
+$wgAutoloadClasses['ApiMirrorLogEntry'] = __DIR__ . '/ApiMirrorLogEntry.php';
 $wgHooks['APIEditBeforeSave'][] = 'MirrorTools::onAPIEditBeforeSave';
 $wgAPIModules['mirroredit'] = 'ApiMirrorEditPage';
-$wgAPIModules['mirrorcreateuser'] = 'ApiMirrorCreateUser';
-#$wgHooks['PageContentSaveRevision'][] = 'MirrorTools::onPageContentSaveRevision';
+$wgAPIModules['mirrorlogentry'] = 'ApiMirrorLogEntry';
 $wgHooks['RevisionInsert'][] = 'MirrorTools::onRevisionInsert';
 $wgHooks['UpdateRevisionOn'][] = 'MirrorTools::onUpdateRevisionOn';
 $wgHooks['BeforeRecentChangeSave'][] = 'MirrorTools::onBeforeRecentChangeSave';
 $wgHooks['LoadExtensionSchemaUpdates'][] = 'MirrorTools::SchemaUpdates';
 $wgMirrorEditParams = array();
 $wgGroupPermissions['user']['mirrortools'] = true;
+$wgSpecialPages[ 'DeleteMirrored' ] = 'SpecialDeleteMirrored';
+$wgAutoloadClasses[ 'SpecialDeleteMirrored' ] = __DIR__ . "/SpecialDeleteMirrored.php";

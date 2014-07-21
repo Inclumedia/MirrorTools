@@ -2,6 +2,7 @@
 
 class MirrorTools {
         public static function SchemaUpdates( $updater ) {
+		// bigint updates
 		// log_id
 		$updater->addExtensionUpdate( array( 'modifyField', 'logging', 'log_id',
                         dirname( __FILE__ ) . '/patches/patch-log_id-bigint-unsigned.sql', true ) );
@@ -116,6 +117,10 @@ class MirrorTools {
                         dirname( __FILE__ ) . '/patches/patch-rev_id-one-quadrillion.sql', true ) );
                 $updater->addExtensionUpdate( array( 'modifyField', 'user', 'user_id',
                         dirname( __FILE__ ) . '/patches/patch-user_id-one-quadrillion.sql', true ) );
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_page',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_page.sql', true ) );
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_user',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_user.sql', true ) );
 		$dbw = wfGetDB( DB_MASTER );
 		$keys = array(
 			'populate rev_parent_id',
