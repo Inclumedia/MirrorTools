@@ -23,7 +23,7 @@
  */
 
 /**
- * A module that allows for creating users.
+ * A module that allows for mirroring edits.
  *
  * @ingroup API
  */
@@ -38,9 +38,11 @@ class ApiMirrorEditPage extends ApiBase {
 		$params['rctitle'] = str_replace( ' ', '_', $params['rctitle'] );
 		// Check sha1
 		$sha = Revision::base36Sha1( $params['oldtext'] );
-		if ( $sha1 != $params['sha1'] ) {
-			$this->dieUsage( "sha1 does not match. Submitted: " . $params['revsha1']
-				. "Should have been: $sha1" );
+		if ( $params['oldtext'] ) {
+			if ( $sha1 != $params['sha1'] ) {
+				$this->dieUsage( "sha1 does not match. Submitted: " . $params['revsha1']
+					. "Should have been: $sha1" );
+			}
 		}
 		$dbw = wfGetDB( DB_MASTER );
 		// See if this data is already in the tables
@@ -121,6 +123,7 @@ class ApiMirrorEditPage extends ApiBase {
 		);
 		$dbw->insert( 'text', $insertTextArray );
 		$oldId = $dbw->insertId();
+		$pushTimestamp = wfTimestamp( TS_MW );
 		$insertRevisionArray = array(
 			'rev_id' => $params['revid'],
 			'rev_page' => $pageId,
@@ -137,7 +140,8 @@ class ApiMirrorEditPage extends ApiBase {
 			'rev_content_model' => $params['revcontentmodel'],
 			'rev_content_format' => $params['revcontentformat'],
 			'rev_mt_page' => $params['revpage'],
-			'rev_mt_user' => $params['revuser']
+			'rev_mt_user' => $params['revuser'],
+			'rev_mt_push_timestamp' => $pushTimestamp
 		);
 		$dbw->insert( 'revision', $insertRevisionArray );
 		$revId = $dbw->insertId();
@@ -233,11 +237,11 @@ class ApiMirrorEditPage extends ApiBase {
 			),
 			'revuser' => array(
 				ApiBase::PARAM_TYPE => 'integer',
-				ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_DFLT => 0
 			),
 			'revusertext' => array(
 				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_DFLT => ''
 			),
 			'revtimestamp' => array(
 				ApiBase::PARAM_TYPE => 'timestamp',
@@ -257,7 +261,7 @@ class ApiMirrorEditPage extends ApiBase {
 			),
 			'revsha1' => array(
 				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_DFLT => ''
 			),
 			'revcontentmodel' => array(
 				ApiBase::PARAM_TYPE => 'string',
@@ -265,7 +269,7 @@ class ApiMirrorEditPage extends ApiBase {
 			),
 			'revcontentformat' => array(
 				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_DFLT => NULL
 			),
 			'rcid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
@@ -305,7 +309,7 @@ class ApiMirrorEditPage extends ApiBase {
 			),
 			'oldtext' => array(
 				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_REQUIRED => true
+				ApiBase::PARAM_DFLT => ''
 			),
 			'oldflags' => array(
 				ApiBase::PARAM_TYPE => 'string',

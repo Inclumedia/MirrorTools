@@ -1,8 +1,8 @@
 <?php
 /**
  *
- * ApiMirrorLogEntry
- * Created on 13 July 2014 by Nathan Larson
+ * ApiMirrorMove
+ * Created on 22 July 2014 by Nathan Larson
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,12 +23,13 @@
  */
 
 /**
- * A module that allows for mirroring log entries.
+ * A module that allows for mirroring page moves.
  *
  * @ingroup API
  */
-class ApiMirrorLogEntry extends ApiBase {
+class ApiMirrorMove extends ApiBase {
 	public function execute() {
+		global $wgNamespacesToTruncate;
 		$user = $this->getUser();
 		if ( !$user->isAllowed( 'mirrortools' ) ) {
 			$this->dieUsage( 'Access denied: This user does not have the mirrortools right' );
@@ -41,11 +42,47 @@ class ApiMirrorLogEntry extends ApiBase {
 		if ( $res ) {
 			$this->dieUsage( 'Log id ' . $params['logid'] . ' is already in the logging table' );
 		}
+		$logParams = unserialize( $params['logparams'] );
+		$moveTo = $logParams['4::target'];
+		$noRedir = $logParams['5::noredir'] == '1' ? true : false;
+		$moveToNamespace = 0;
+		$moveToTitle = $moveTo;
+		foreach( $wgMirrorNamespaces as $mirrorNamespace ) {
+			if ( substr( $moveTo, 0, strlen( $mirrorNamespace ) )
+				== $namespaceToTruncate ) {
+				$moveToTitle = substr( $moveTo,
+				    strlen( $mirrorNamespace ),
+				    strlen( $moveTo )
+				    - strlen( $mirrorNamespace ) );
+				$moveToNamespace = $mirrorNamespace;
+				break;
+			}
+                }
+		$conds = array(
+			'page_namespace' => $moveToNamespace,
+			'page_title' => $moveToTitle
+		);
+		$res = $dbw->selectRow( 'page', array( 'page_id' ), $conds );
+		if ( $res ) {
+			// Move revisions
+		} else {
+			// Change page namespace and title
+			$dbw->update(
+				'page',
+				array(
+					'page_namespace' => $moveToNamespace,
+					'page_title' => $moveToTitle
+				),
+				array(
+					'page_id' => $params['logpage']
+				)
+			);
+		}
 		$pushTimestamp = wfTimestamp( TS_MW );
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],
-			'log_type' => $params['logtype'],
-			'log_action' => $params['logaction'],
+			'log_type' => 'move',
+			'log_action' => 'move',
 			'log_timestamp' => $params['logtimestamp'],
 			'log_user' => $params['loguser'],
 			'log_namespace' => $params['lognamespace'],
@@ -57,9 +94,18 @@ class ApiMirrorLogEntry extends ApiBase {
 			'log_page' => $params['logpage'],
 			'log_mt_push_timestamp' => $pushTimestamp
 		);
+		$dbw->insert( 'logging', $insertLoggingArray );
+		if ( $params['tstags'] ) {
+			$insertTagsummaryArray = array(
+				'ts_log_id' => $params['logid'],
+				'ts_rc_id' => $param['rcid'],
+				'ts_tags' => $params['tstags']
+			);
+			$dbw->insert( 'tag_summary', $insertTagsummaryArray );
+		}
 		$r = array();
 		$r['result'] = 'Success';
-		$r['timestamp'] = $pushTimestamp;
+		$r['timestamp'] = wfTimestamp( TS_MW );
 		$this->getResult()->addValue( null, $this->getModuleName(), $r );
 		return true;
 	}

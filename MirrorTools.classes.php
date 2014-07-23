@@ -117,10 +117,18 @@ class MirrorTools {
                         dirname( __FILE__ ) . '/patches/patch-rev_id-one-quadrillion.sql', true ) );
                 $updater->addExtensionUpdate( array( 'modifyField', 'user', 'user_id',
                         dirname( __FILE__ ) . '/patches/patch-user_id-one-quadrillion.sql', true ) );
+		// Remote wiki page ID
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_page',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_page.sql', true ) );
+		// Remote wiki user ID
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_user',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_user.sql', true ) );
+		// Timestamp the revision was mirrorpushed
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_push_timestamp',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_push_timestamp.sql', true ) );
+		// Timestamp the log entry was mirrorpushed
+		$updater->addExtensionUpdate( array( 'addField', 'logging', 'log_mt_push_timestamp',
+                        dirname( __FILE__ ) . '/patches/patch-log_mt_push_timestamp.sql', true ) );
 		$dbw = wfGetDB( DB_MASTER );
 		$keys = array(
 			'populate rev_parent_id',
