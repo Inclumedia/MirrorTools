@@ -120,15 +120,30 @@ class MirrorTools {
 		// Remote wiki page ID
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_page',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_page.sql', true ) );
-		// Remote wiki user ID
+		// Remote wiki user ID for log event
+		$updater->addExtensionUpdate( array( 'addField', 'logging', 'log_mt_user',
+                        dirname( __FILE__ ) . '/patches/patch-log_mt_user.sql', true ) );
+		// Remote wiki user ID for recentchanges event
+		$updater->addExtensionUpdate( array( 'addField', 'recentchanges', 'rc_mt_user',
+                        dirname( __FILE__ ) . '/patches/patch-rc_mt_user.sql', true ) );
+		// Remote wiki user ID for revision
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_user',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_user.sql', true ) );
-		// Timestamp the revision was mirrorpushed
-		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_push_timestamp',
-                        dirname( __FILE__ ) . '/patches/patch-rev_mt_push_timestamp.sql', true ) );
+		// rev_page from before the revisions were merged into the page history of the mirrored page
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_former_page',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_former_page.sql', true ) );
+		// Is the revision live on the remote wiki? (if deleted or nonexistent remotely, then 0)
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_remotely_live',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_remotely_live.sql', true ) );
 		// Timestamp the log entry was mirrorpushed
 		$updater->addExtensionUpdate( array( 'addField', 'logging', 'log_mt_push_timestamp',
                         dirname( __FILE__ ) . '/patches/patch-log_mt_push_timestamp.sql', true ) );
+		// Timestamp the recent change was mirrorpushed
+		$updater->addExtensionUpdate( array( 'addField', 'recentchanges', 'rc_mt_push_timestamp',
+                        dirname( __FILE__ ) . '/patches/patch-rc_mt_push_timestamp.sql', true ) );
+		// Timestamp the revision was mirrorpushed
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_push_timestamp',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_push_timestamp.sql', true ) );
 		$dbw = wfGetDB( DB_MASTER );
 		$keys = array(
 			'populate rev_parent_id',

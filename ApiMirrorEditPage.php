@@ -69,28 +69,45 @@ class ApiMirrorEditPage extends ApiBase {
 		$childId = 0;
 		$readPageIsNew = 0;
 		$pageIsNew = 0;
-		if ( $res ) { // If so, get that page ID and find what will be the parent and
-			// child revisions. First, the parent revision...
-			$pageId = $res->page_id;
+		$oldLen = 0;
+		if ( $res ) {
+			$pageId = $params['revpage'];
 			$readPageIsNew = $res->page_is_new;
-			$vars = array( 'maxrevtimestamp' => 'MAX(rev_timestamp)', 'rev_id', 'rev_len' );
+			// Move all the revisions presently at that page title to the new page ID
+			$dbw->update(
+				'revision',
+				array(
+					'rev_mt_former_page' => 'rev_page',
+					'rev_page' => $pageId
+				),
+				array( 'rev_page' => $res->page_id )
+			);
+			// Change the page_id
+			$dbw->update(
+				'page',
+				array( 'page_id' => $pageId ),
+				array( 'page_id' => $res->page_id )
+			);
+			// Find out what will be the parent revision
+			$vars = array( 'rev_id', 'rev_len' );
 			$conds = array(
 				"rev_timestamp < " . $params['revtimestamp'],
 				'rev_page' => $pageId
 			);
-			$res = $dbw->selectRow( 'revision', $vars, $conds );
-			
+			$res = $dbw->selectRow( 'revision', $vars, $conds, __METHOD__,
+				array( 'ORDER BY' => 'rev_timestamp DESC' ) );
 			if ( $res ) {
 				$parentId = $res->rev_id;
 				$oldLen = $res->rev_len;
 			}
-			// Now, the child revision...
-			$vars = array( 'minrevtimestamp' => 'MIN(rev_timestamp)', 'rev_id' );
+			// Find out what will be the child revision
 			$conds = array(
 				"rev_timestamp > " . $params['revtimestamp'],
 				'rev_page' => $pageId
 			);
-			$res = $dbw->selectRow( 'revision', $vars, $conds );
+			$res = $dbw->selectField( 'revision', 'rev_id', $conds, __METHOD__,
+				array( 'ORDER BY' => 'rev_timestamp ASC' )
+			);
 			if ( $res ) {
 				$childId = $res->rev_id;
 			}
@@ -108,7 +125,7 @@ class ApiMirrorEditPage extends ApiBase {
 				'page_is_new' => 1,
 				'page_random' => wfRandom(),
 				'page_touched' => $params['revtimestamp'],
-				'page_links_updated' => $params['revtimestamp'],
+				'page_links_updated' => NULL,
 				'page_latest' => $params['revid'],
 				'page_len' => $params['revlen'],
 				'page_content_model' => $params['revcontentmodel'],
@@ -141,7 +158,8 @@ class ApiMirrorEditPage extends ApiBase {
 			'rev_content_format' => $params['revcontentformat'],
 			'rev_mt_page' => $params['revpage'],
 			'rev_mt_user' => $params['revuser'],
-			'rev_mt_push_timestamp' => $pushTimestamp
+			'rev_mt_push_timestamp' => $pushTimestamp,
+			'rev_mt_remotely_live' => 1
 		);
 		$dbw->insert( 'revision', $insertRevisionArray );
 		$revId = $dbw->insertId();
@@ -189,7 +207,7 @@ class ApiMirrorEditPage extends ApiBase {
 			'rc_cur_id' => $pageId,
 			'rc_this_oldid' => $params['revid'],
 			'rc_last_oldid' => $parentId,
-			'rc_type' => $params['rctype'],
+			'rc_type' => $params['rcnew'] ? 1 : 0,
 			'rc_source' => $params['rcsource'],
 			'rc_patrolled' => $params['rcpatrolled'],
 			'rc_ip' => $params['rcip'],
@@ -199,7 +217,9 @@ class ApiMirrorEditPage extends ApiBase {
 			'rc_logid' => 0,
 			'rc_log_type' => NULL,
 			'rc_log_action' => '',
-			'rc_params' => ''
+			'rc_params' => '',
+			'rc_mt_push_timestamp' => $pushTimestamp,
+			'rc_mt_user' => $params['revuser']
 		);
 		$dbw->insert( 'recentchanges', $insertRecentchangesArray );
 		if ( $params['tstags'] ) {
@@ -212,7 +232,7 @@ class ApiMirrorEditPage extends ApiBase {
 		}
 		$r = array();
 		$r['result'] = 'Success';
-		$r['timestamp'] = wfTimestamp( TS_MW );
+		$r['timestamp'] = $pushTimestamp;
 		$this->getResult()->addValue( null, $this->getModuleName(), $r );
 		return true;
 	}
@@ -237,7 +257,7 @@ class ApiMirrorEditPage extends ApiBase {
 			),
 			'revuser' => array(
 				ApiBase::PARAM_TYPE => 'integer',
-				ApiBase::PARAM_DFLT => 0
+				ApiBase::PARAM_REQUIRED => true
 			),
 			'revusertext' => array(
 				ApiBase::PARAM_TYPE => 'string',
