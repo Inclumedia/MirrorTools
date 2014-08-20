@@ -155,41 +155,73 @@ class MirrorTools {
                 return true;
         }
 
-        // All this need do is collect data from the API function and put it in a global variable
-        // for use by other functions
-        public static function onAPIEditBeforeSave( $editPage, $text, &$resultArr, $params ) {
-                global $wgMirrorEditParams;
-                $wgMirrorEditParams = $params;
-                return true;
-        }
-
-        // When inserting a revision, change a few fields
-        public static function onRevisionInsert( &$this, $data, $flags, &$row ) {
-                global $wgMirrorEditParams;
-                if ( $wgMirrorEditParams ) {
-                        $row['rev_timestamp'] = $wgMirrorEditParams['timestamp'];
-                        $row['rev_id'] = $wgMirrorEditParams['revid'];
-                        $row['rev_user'] = $wgMirrorEditParams['userid'];
-                        $row['rev_user_text'] = $wgMirrorEditParams['user'];
-                        // TODO: Add code for figuring out parent ID, if necessary
-                        // See getPreviousRevisionId if you need to
-                }
+	public static function enhancedChangesListMainlineRecentChangesFlags( $rcObj, &$flags ) {
+		if ( $rcObj->mAttribs['rc_mt_push_timestamp'] ) {
+			$flags['mirrored'] = true;
+		}
 		return true;
-        }
+	}
 
-        // TODO: Do something to enable this to handle laggy situations, in which a revision is made
-        // to the local wiki before it's made to the remote wiki. Right now it does nothing.
-        public static function onUpdateRevisionOn( $dbw, $revision, $lastRevision,
-                $lastRevIsRedirect, &$row, &$conditions, &$result ) {
-                return true;
-        }
+	public static function enhancedChangesListSubentryRecentChangesFlags( $rcObj, &$flags ) {
+		if ( $rcObj->mAttribs['rc_mt_push_timestamp'] ) {
+			$flags['mirrored'] = true;
+		}
+		return true;
+	}
 
-        // Use the recent change ID
-        public static function onBeforeRecentChangeSave( &$attribs ) {
-                global $wgMirrorEditParams;
-                if ( $wgMirrorEditParams ) {
-                        $attribs['rc_id'] = $wgMirrorEditParams['rcid'];
-                }
-        }
+	public static function oldChangesListRecentChangesFlags( $rcObj, &$flags ) {
+		if ( $rcObj->mAttribs['rc_mt_push_timestamp'] ) {
+			$flags['mirrored'] = true;
+		}
+		return true;
+	}
 
+	public static function historyLineFlags( $row, &$space, &$s ) {
+		if ( $row->rev_mt_push_timestamp ) {
+			$space = false;
+			$s .= ChangesList::flag( 'mirrored' );
+		}
+		return true;
+	}
+
+	public static function showDiffPageOldMinor( $rev, &$oldminor ) {
+		$attributes = $rev->getAttributes();
+		if ( $attributes['rev_mt_push_timestamp'] ) {
+			$oldminor = ChangesList::flag( 'mirrored' ) . $oldminor;
+		}
+		return true;
+	}
+
+	public static function showDiffPageNewMinor( $rev, &$newminor ) {
+		$attributes = $rev->getAttributes();
+		if ( isset( $attributes['rev_mt_push_timestamp'] )  &&
+			$attributes['rev_mt_push_timestamp'] ) {
+			$newminor = ChangesList::flag( 'mirrored' ) . $newminor;
+		}
+		return true;
+	}
+
+	public static function recentChangesFields( &$fields ) {
+		$fields[] = 'rc_mt_push_timestamp';
+		return true;
+	}
+
+	public static function enhancedChangesBlockLineFlags( $rcObj, &$flags ) {
+		if ( $rcObj->mAttribs['rc_mt_push_timestamp'] ) {
+			$flags['mirrored'] = true;
+		}
+		return true;
+	}
+
+	public static function revisionAttribs( $row, &$attribs ) {
+		if ( isset( $row->rev_mt_push_timestamp ) ) {
+			$attribs['rev_mt_push_timestamp'] = $row->rev_mt_push_timestamp;
+		}
+		return true;
+	}
+
+	public static function revisionSelectFields( &$fields ) {
+		$fields[] = 'rev_mt_push_timestamp';
+		return true;
+	}
 }

@@ -163,7 +163,7 @@ class ApiMirrorMove extends ApiBase {
 			// Delete the page table entry for the target page.
 			$dbw->delete(
 				'page',
-				array( 'page_id' => $params['logpage'] )
+				array( 'page_id' => $alreadyExistingTargetPageId )
 			);
 		}
 		// Find most recent revision

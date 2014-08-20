@@ -76,3 +76,17 @@ $wgNamespacesToTruncate = array(
     828 => 'Module:',
     829 => 'Module talk:'
 );
+$wgHooks['EnhancedChangesListMainlineRecentChangesFlags'][] = 'MirrorTools::enhancedChangesListMainlineRecentChangesFlags';
+$wgHooks['EnhancedChangesListSubentryRecentChangesFlags'][] = 'MirrorTools::enhancedChangesListSubentryRecentChangesFlags';
+$wgHooks['OldChangesListRecentChangesFlags'][] = 'MirrorTools::oldChangesListRecentChangesFlags';
+$wgHooks['HistoryLineFlags'][] = 'MirrorTools::historyLineFlags';
+$wgHooks['ShowDiffPageOldMinor'][] = 'MirrorTools::showDiffPageOldMinor';
+$wgHooks['ShowDiffPageNewMinor'][] = 'MirrorTools::showDiffPageNewMinor';
+$wgHooks['RecentChangesFields'][] = 'MirrorTools::recentChangesFields';
+$wgHooks['EnhancedChangesBlockLineFlags'][] = 'MirrorTools::enhancedChangesBlockLineFlags';
+$wgHooks['RevisionAttribs'][] = 'MirrorTools::revisionAttribs';
+$wgHooks['RevisionSelectFields'][] = 'MirrorTools::revisionSelectFields';
+
+$wgMessagesDirs['MirrorTools'] = __DIR__ . '/i18n';
+$wgRecentChangesFlags = array_merge( array( 'mirrored' => array( 'letter' => 'mirroredletter',
+	'title' => 'recentchanges-label-mirrored' ) ), $wgRecentChangesFlags );
