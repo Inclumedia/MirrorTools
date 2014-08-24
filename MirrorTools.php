@@ -86,6 +86,8 @@ $wgHooks['RecentChangesFields'][] = 'MirrorTools::recentChangesFields';
 $wgHooks['EnhancedChangesBlockLineFlags'][] = 'MirrorTools::enhancedChangesBlockLineFlags';
 $wgHooks['RevisionAttribs'][] = 'MirrorTools::revisionAttribs';
 $wgHooks['RevisionSelectFields'][] = 'MirrorTools::revisionSelectFields';
+$wgHooks['OldChangesListLogFlags'][] = 'MirrorTools::oldChangesListLogFlags';
+$wgMirrorToolsDynamicParentIDs = false;
 
 $wgMessagesDirs['MirrorTools'] = __DIR__ . '/i18n';
 $wgRecentChangesFlags = array_merge( array( 'mirrored' => array( 'letter' => 'mirroredletter',

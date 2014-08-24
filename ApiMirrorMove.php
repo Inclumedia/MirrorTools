@@ -142,22 +142,53 @@ class ApiMirrorMove extends ApiBase {
 			)
 		);
 		if ( $alreadyExistingTargetPageId ) {
+			// If there's only one remotely live revision at the target, and it's a
+			// redirect, delete it.
+			$numRevsRes = $dbw->select(
+				'revision',
+				'rev_id',
+				array(
+					'rev_page' => $alreadyExistingTargetPageId,
+					'rev_mt_remotely_live' => 1
+				)
+			);
+			$numRevs = $dbw->numRows( $numRevsRes );
+			if ( $numRevs == 1 ) {
+				$numRevsRevId = $numRevsRes[1]->rev_id;
+				$numRevsRev = Revision::newFromId( $numRevsRevId );
+				$content = $numRevsRev->getContent();
+				$redir = MagicWord::get( 'redirect' );
+				$text = ltrim( $content->getNativeData() );
+				if ( $redir->matchStartAndRemove( $text ) ) {
+					$m = array();
+					if ( preg_match( '!^\s*:?\s*\[{2}(.*?)(?:\|.*?)?\]{2}\s*!',
+						$text, $m ) ) {
+						if ( strpos( $m[1], '%' ) !== false ) {
+							$m[1] = rawurldecode( ltrim( $m[1], ':' ) );
+						}
+						if ( $m[1] == $prefixedMoveTo ) {
+							$dbw->delete( 'revision',
+							array( 'rev_id' => $numRevsRevId )
+							);
+						}
+					}
+				}
+			}
 			// A local page already exists at the target page title and namespace.
 			// Make any remotely live revisions that are at that target page not
-			// remotely live anymore; they're probably a redirect or something.
-			// Change the rev_page of the revisions that already exist at the target to
-			// the page ID of the mirrored page. Also set the rev_mt_former_page in
-			// case there's another mirrormove reversing this mirrormove.
+			// remotely live anymore. Change the rev_page of the revisions that
+			// already exist at the target to the page ID of the mirrored page. Also
+			// set the rev_mt_former_page in case there's another mirrormove
+			// reversing this mirrormove.
 			$dbw->update(
 				'revision',
 				array(
 					'rev_page' => $sourcePageId,
-					'rev_mt_page' => $sourcePageId,
 					'rev_mt_former_page' => $alreadyExistingTargetPageId,
 					'rev_mt_remotely_live' => 0
 				),
 				array(
-				      'rev_page' => $alreadyExistingTargetPageId,
+				      'rev_page' => $alreadyExistingTargetPageId
 				)
 			);
 			// Delete the page table entry for the target page.
@@ -166,12 +197,15 @@ class ApiMirrorMove extends ApiBase {
 				array( 'page_id' => $alreadyExistingTargetPageId )
 			);
 		}
-		// Find most recent revision
+		// Find most recent revision prior to null revision
 		$mostRecentRevisionRow = $dbw->selectRow(
 			'revision',
 			array( 'rev_id', 'rev_text_id', 'rev_len', 'rev_sha1', 'rev_content_model',
 			      'rev_content_format' ),
-			array( 'rev_page' => $sourcePageId ),
+			array(
+			      'rev_page' => $sourcePageId,
+			      "rev_timestamp<" . $params['logtimestamp']
+			),
 			__METHOD__,
 			array( 'ORDER BY' => 'rev_timestamp DESC' )
 		);
@@ -298,7 +332,7 @@ class ApiMirrorMove extends ApiBase {
 				'rev_len' => strlen( $oldText ),
 				'rev_parent_id' => $parentId,
 				'rev_sha1' => Revision::base36Sha1( $oldText ),
-				'rev_mt_page' => $params['redirrevid'] ? $redirectPageId : NULL,
+				'rev_mt_page' => $redirectPageId,
 				'rev_mt_user' => $params['loguser'],
 				'rev_mt_push_timestamp' => $pushTimestamp,
 				'rev_mt_remotely_live' => 1

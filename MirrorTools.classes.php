@@ -176,6 +176,13 @@ class MirrorTools {
 		return true;
 	}
 
+	public static function oldChangesListLogFlags( $rcObj, &$flags ) {
+		if ( $rcObj->mAttribs['rc_mt_push_timestamp'] ) {
+			$flags['mirrored'] = true;
+		}
+		return true;
+	}
+
 	public static function historyLineFlags( $row, &$space, &$s ) {
 		if ( $row->rev_mt_push_timestamp ) {
 			$space = false;
