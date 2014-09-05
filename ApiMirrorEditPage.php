@@ -63,17 +63,25 @@ class ApiMirrorEditPage extends ApiBase {
 			'page_title' => $params['rctitle'],
 			'page_namespace' => $params['rcnamespace'],
 		);
-		$res = $dbw->selectRow( 'page', array( 'page_id', 'page_is_new' )
-			, $conds );
-		$parentId = 0;
-		$childId = 0;
-		$readPageIsNew = 0;
-		$pageIsNew = 0;
-		$oldLen = 0;
+		$res = $dbw->selectRow(
+			'page',
+			array( 'page_id', 'page_is_new', 'page_latest', 'page_is_redirect',
+			      'page_mt_remotely_live' ),
+			$conds
+		);
+		// If the page title and namespace are in the page table, then this page is now
+		// under LocalWiki control
 		if ( $res ) {
 			$pageId = $params['revpage'];
+			$pageIsNew = 0;
+			$pageIsRedirect = $res->page_is_redirect;
 			$readPageIsNew = $res->page_is_new;
-			// Move all the revisions presently at that page title to the new page ID
+			$readPageLatest = $res->page_latest;
+			$readPageIsRedirect = $res->page_is_redirect;
+			$readPageIsRemotelyLive = $res->page_mt_remotely_live;
+			$pageLatest = $readPageLatest;
+			// Move all the revisions presently at that page title to the RemoteWiki
+			// page ID
 			$dbw->update(
 				'revision',
 				array(
@@ -82,46 +90,29 @@ class ApiMirrorEditPage extends ApiBase {
 				),
 				array( 'rev_page' => $res->page_id )
 			);
-			// Change the page_id
+			// Change the LocalWiki page_id to the RemoteWiki page_id
 			$dbw->update(
 				'page',
 				array( 'page_id' => $pageId ),
 				array( 'page_id' => $res->page_id )
 			);
-			// Find out what will be the parent revision
-			$vars = array( 'rev_id', 'rev_len' );
-			$conds = array(
-				"rev_timestamp < " . $params['revtimestamp'],
-				'rev_page' => $pageId
-			);
-			$res = $dbw->selectRow( 'revision', $vars, $conds, __METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC' ) );
-			if ( $res ) {
-				$parentId = $res->rev_id;
-				$oldLen = $res->rev_len;
-			}
-			// Find out what will be the child revision
-			$conds = array(
-				"rev_timestamp > " . $params['revtimestamp'],
-				'rev_page' => $pageId
-			);
-			$res = $dbw->selectField( 'revision', 'rev_id', $conds, __METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp ASC' )
-			);
-			if ( $res ) {
-				$childId = $res->rev_id;
-			}
-		} else { // If not, add a new entry to the page table
+		// If the page title and namespace are not in the page table, then add a new entry
+		// to the page table
+		} else {
 			$pageIsNew = 1;
+			$pageIsRedirect = MirrorTools::getRedirectTarget(
+				$params['oldtext'] ) ? 1 : 0;
+			$pageLatest = $params['revid'];
 			$readPageIsNew = 1;
+			$readPageIsRedirect = $pageIsRedirect;
+			$readPageLatest = $pageLatest;
+			$readPageIsRemotelyLive = 1;
 			$insertPageArray = array(
 				'page_id' => $params['revpage'],
 				'page_namespace' => $params['rcnamespace'],
 				'page_title' => $params['rctitle'],
 				'page_counter' => 0,
-				// TODO: Perhaps fix this using WikitextContent's
-				// getRedirectTargetAndText()
-				'page_is_redirect' => 0,
+				'page_is_redirect' =>  $pageIsRedirect,
 				'page_is_new' => 1,
 				'page_random' => wfRandom(),
 				'page_touched' => $params['revtimestamp'],
@@ -129,7 +120,8 @@ class ApiMirrorEditPage extends ApiBase {
 				'page_latest' => $params['revid'],
 				'page_len' => $params['revlen'],
 				'page_content_model' => $params['revcontentmodel'],
-				'page_lang' => NULL
+				'page_lang' => NULL,
+				'page_mt_remotely_live' => 1
 			);
 			$dbw->insert( 'page', $insertPageArray );
 			$pageId = $dbw->insertId();
@@ -141,6 +133,7 @@ class ApiMirrorEditPage extends ApiBase {
 		$dbw->insert( 'text', $insertTextArray );
 		$oldId = $dbw->insertId();
 		$pushTimestamp = wfTimestamp( TS_MW );
+		// Insert the mirrored revision
 		$insertRevisionArray = array(
 			'rev_id' => $params['revid'],
 			'rev_page' => $pageId,
@@ -152,7 +145,7 @@ class ApiMirrorEditPage extends ApiBase {
 			'rev_minor_edit' => $params['revminoredit'],
 			'rev_deleted' => $params['revdeleted'],
 			'rev_len' => $params['revlen'],
-			'rev_parent_id' => $parentId,
+			'rev_parent_id' => $params['rclastoldid'],
 			'rev_sha1' => $params['revsha1'],
 			'rev_content_model' => $params['revcontentmodel'],
 			'rev_content_format' => $params['revcontentformat'],
@@ -163,65 +156,74 @@ class ApiMirrorEditPage extends ApiBase {
 		);
 		$dbw->insert( 'revision', $insertRevisionArray );
 		$revId = $dbw->insertId();
-		// Change the child revision to point to this one
-		if ( $childId ) {
-			$dbw->update(
+		// Update page_latest and/or page_is_new and/or page_is_redirect
+		// Start by figuring out what the page_latest should be. This had to wait until
+		// after the revision was inserted, because the latest revision could be the one
+		// that was just inserted.
+		if ( !$pageIsNew ) {
+			$pageLatest = $dbw->selectField(
 				'revision',
-				array( 'rev_parent_id' => $revId ),
-				array( 'rev_id' => $childId )
+				'rev_id',
+				array( 'rev_page' => $pageId ),
+				__METHOD__,
+				array( 'ORDER BY' => 'rev_timestamp DESC' )
 			);
-		}
-		// Update page_latest and/or page_is_new
-		if ( $parentId && !$childId ) {
-			$conds = array(
-				'page_latest' => $params['revid'],
-			);
-			if ( $readPageIsNew ) {
-				$conds['page_is_new'] = 0;
+			if ( $readPageLatest != $pageLatest ) {
+				// The new revision must be the latest revision, so see if it's a
+				// redirect
+				$pageIsRedirect = MirrorTools::getRedirectTarget(
+					$params['oldtext'] ) ? 1 : 0;
 			}
+		}
+		// If there's any data in the page entry to update, then update it
+		if ( $readPageLatest != $pageLatest
+			|| $readPageIsNew != $pageisNew
+			|| $readPageIsRedirect != $pageisRedirect
+			|| !$readPageIsRemotelyLive
+		) {
 			$dbw->update(
 				'page',
-				$conds,
-				array( 'page_id' => $pageId )
-			);
-		// Update page_is_new
-		} elseif ( $readPageIsNew && !$pageIsNew ) {
-			$conds['page_is_new'] = 0;
-			$dbw->update(
-				'page',
-				$conds,
+				array(
+				      'page_latest' => $pageLatest,
+				      'page_is_new' => $pageIsNew,
+				      'page_is_redirect' => $pageIsRedirect,
+				      'page_mt_remotely_live' => 1
+				),
 				array( 'page_id' => $pageId )
 			);
 		}
-		$insertRecentchangesArray = array(
-			'rc_id' => $params['rcid'],
-			'rc_timestamp' => $params['revtimestamp'],
-			'rc_user' => 0,
-			'rc_user_text' => $params['revusertext'],
-			'rc_namespace' => $params['rcnamespace'],
-			'rc_title' => $params['rctitle'],
-			'rc_comment' => $params['revcomment'],
-			'rc_minor' => $params['revminoredit'],
-			'rc_bot' => $params['rcbot'],
-			'rc_new' => $params['rcnew'],
-			'rc_cur_id' => $pageId,
-			'rc_this_oldid' => $params['revid'],
-			'rc_last_oldid' => $parentId,
-			'rc_type' => $params['rcnew'] ? 1 : 0,
-			'rc_source' => $params['rcsource'],
-			'rc_patrolled' => $params['rcpatrolled'],
-			'rc_ip' => $params['rcip'],
-			'rc_old_len' => $oldLen,
-			'rc_new_len' => $params['revlen'],
-			'rc_deleted' => $params['revdeleted'],
-			'rc_logid' => 0,
-			'rc_log_type' => NULL,
-			'rc_log_action' => '',
-			'rc_params' => '',
-			'rc_mt_push_timestamp' => $pushTimestamp,
-			'rc_mt_user' => $params['revuser']
-		);
-		$dbw->insert( 'recentchanges', $insertRecentchangesArray );
+		// Insert recentchanges and tags entries, unless rcid param is set to zero
+		if ( $params['rcid'] ) {
+			$insertRecentchangesArray = array(
+				'rc_id' => $params['rcid'],
+				'rc_timestamp' => $params['revtimestamp'],
+				'rc_user' => 0,
+				'rc_user_text' => $params['revusertext'],
+				'rc_namespace' => $params['rcnamespace'],
+				'rc_title' => $params['rctitle'],
+				'rc_comment' => $params['revcomment'],
+				'rc_minor' => $params['revminoredit'],
+				'rc_bot' => $params['rcbot'],
+				'rc_new' => $params['rcnew'],
+				'rc_cur_id' => $pageId,
+				'rc_this_oldid' => $params['revid'],
+				'rc_last_oldid' => $params['rclastoldid'],
+				'rc_type' => $params['rcnew'] ? 1 : 0,
+				'rc_source' => $params['rcsource'],
+				'rc_patrolled' => $params['rcpatrolled'],
+				'rc_ip' => $params['rcip'],
+				'rc_old_len' => $params['rcoldlen'],
+				'rc_new_len' => $params['revlen'],
+				'rc_deleted' => $params['revdeleted'],
+				'rc_logid' => 0,
+				'rc_log_type' => NULL,
+				'rc_log_action' => '',
+				'rc_params' => '',
+				'rc_mt_push_timestamp' => $pushTimestamp,
+				'rc_mt_user' => $params['revuser']
+			);
+			$dbw->insert( 'recentchanges', $insertRecentchangesArray );
+		}
 		if ( $params['tstags'] ) {
 			$insertTagsummaryArray = array(
 				'ts_rc_id' => $params['rcid'],
@@ -327,6 +329,14 @@ class ApiMirrorEditPage extends ApiBase {
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => ''
 			),
+			'rclastoldid' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0
+			),
+			'rcoldlen' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0
+			),
 			'oldtext' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => ''
@@ -342,7 +352,7 @@ class ApiMirrorEditPage extends ApiBase {
 			'token' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_REQUIRED => true
-			)
+			),
 		);
 	}
 

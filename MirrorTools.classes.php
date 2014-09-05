@@ -132,6 +132,9 @@ class MirrorTools {
 		// rev_page from before the revisions were merged into the page history of the mirrored page
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_former_page',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_former_page.sql', true ) );
+		// Does the page have revisions that are live on the remote wiki? (if not, then 0)
+		$updater->addExtensionUpdate( array( 'addField', 'page', 'page_mt_remotely_live',
+                        dirname( __FILE__ ) . '/patches/patch-page_mt_remotely_live.sql', true ) );
 		// Is the revision live on the remote wiki? (if deleted or nonexistent remotely, then 0)
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_remotely_live',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_remotely_live.sql', true ) );
@@ -229,6 +232,63 @@ class MirrorTools {
 
 	public static function revisionSelectFields( &$fields ) {
 		$fields[] = 'rev_mt_push_timestamp';
+		return true;
+	}
+
+	public static function getRedirectTarget( $text ) {
+		$redir = MagicWord::get( 'redirect' );
+		if ( $redir->matchStartAndRemove( $text ) ) {
+			$m = array();
+			if ( preg_match( '!^\s*:?\s*\[{2}(.*?)(?:\|.*?)?\]{2}\s*!',
+				$text, $m ) ) {
+				if ( strpos( $m[1], '%' ) !== false ) {
+					$m[1] = rawurldecode( ltrim( $m[1], ':' ) );
+				}
+				if ( $m[1] ) {
+					return $m[1];
+				} else {
+					return false;
+				}
+			}
+		}
+	}
+
+	public static function onArticlePageDataBefore( $article, $fields ) {
+		$fields[] = 'page_mt_remotely_live';
+	}
+
+	public static function onArticlePageDataAfter( $article, $row ) {
+		global $wgMirrorToolsPageRemotelyLive;
+		if ( isset( $row->page_mt_remotely_live ) ) {
+			$wgMirrorToolsPageRemotelyLive = $row->page_mt_remotely_live;
+		}
+	}
+
+	public static function onSkinTemplateNavigation( SkinTemplate &$sktemplate,
+		array &$links ) {
+		global $wgMirrorToolsEditRemoteWikiUrl,
+			$wgMirrorToolsMoveRemoteWikiUrl,
+			$wgMirrorToolsPageRemotelyLive;
+		// Display the regular tabs if the page isn't remotely live
+		if ( !$wgMirrorToolsPageRemotelyLive ) {
+			return true;
+		}
+		$request = $sktemplate->getRequest();
+		$action = $request->getText( 'action' );
+		$links['views']['editremotely'] = array(
+			'class' => ( $action == 'editremotely') ? 'selected' : false,
+			'text' => wfMessage( 'editonremotewiki' )->plain(),
+			'href' => str_replace( '$1', $sktemplate->getTitle()->getFullText(),
+				$wgMirrorToolsEditRemoteWikiUrl )
+		);
+		$links['views']['moveremotely'] = array(
+			'class' => ( $action == 'moveremotely') ? 'selected' : false,
+			'text' => wfMessage( 'moveonremotewiki' )->plain(),
+			'href' => str_replace( '$1', $sktemplate->getTitle()->getFullText(),
+				$wgMirrorToolsMoveRemoteWikiUrl )
+		);
+		unset( $links['actions']['protect'] );
+		unset( $links['views']['edit'] );
 		return true;
 	}
 }

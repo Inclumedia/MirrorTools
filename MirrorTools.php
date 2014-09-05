@@ -37,11 +37,15 @@ $wgExtensionMessagesFiles['MirrorTools'] = __DIR__ . '/MirrorTools.i18n.php';
 $wgAutoloadClasses['MirrorTools'] = __DIR__ . '/MirrorTools.classes.php';
 $wgAutoloadClasses['ApiMirrorEditPage'] = __DIR__ . '/ApiMirrorEditPage.php';
 $wgAutoloadClasses['ApiMirrorMove'] = __DIR__ . '/ApiMirrorMove.php';
+$wgAutoloadClasses['ApiMirrorDelete'] = __DIR__ . '/ApiMirrorDelete.php';
 $wgAutoloadClasses['ApiMirrorLogEntry'] = __DIR__ . '/ApiMirrorLogEntry.php';
+$wgAutoloadClasses['ApiMakeRemotelyLive'] = __DIR__ . '/ApiMakeRemotelyLive.php';
 $wgHooks['APIEditBeforeSave'][] = 'MirrorTools::onAPIEditBeforeSave';
 $wgAPIModules['mirroredit'] = 'ApiMirrorEditPage';
 $wgAPIModules['mirrorlogentry'] = 'ApiMirrorLogEntry';
 $wgAPIModules['mirrormove'] = 'ApiMirrorMove';
+$wgAPIModules['mirrordelete'] = 'ApiMirrorDelete';
+$wgAPIModules['makeremotelylive'] = 'ApiMakeRemotelyLive';
 $wgHooks['LoadExtensionSchemaUpdates'][] = 'MirrorTools::SchemaUpdates';
 $wgMirrorEditParams = array();
 $wgGroupPermissions['user']['mirrortools'] = true;
@@ -87,7 +91,13 @@ $wgHooks['EnhancedChangesBlockLineFlags'][] = 'MirrorTools::enhancedChangesBlock
 $wgHooks['RevisionAttribs'][] = 'MirrorTools::revisionAttribs';
 $wgHooks['RevisionSelectFields'][] = 'MirrorTools::revisionSelectFields';
 $wgHooks['OldChangesListLogFlags'][] = 'MirrorTools::oldChangesListLogFlags';
-$wgMirrorToolsDynamicParentIDs = false;
+$wgHooks['SkinTemplateNavigation'][] = 'MirrorTools::onSkinTemplateNavigation';
+$wgHooks['ArticlePageDataBefore'][] = 'MirrorTools::onArticlePageDataBefore';
+$wgHooks['ArticlePageDataAfter'][] = 'MirrorTools::onArticlePageDataAfter';
+$wgMirrorToolsPageRemotelyLive = false;
+$wgMirrorToolsEditRemoteWikiUrl = 'http://simple.wikipedia.org/w/index.php?title=$1&action=edit';
+$wgMirrorToolsMoveRemoteWikiUrl = 'http://simple.wikipedia.org/wiki/Special:MovePage/$1';
+#$wgGroupPermissions['sysop']['delete'] = false; // Semi-deletion
 
 $wgMessagesDirs['MirrorTools'] = __DIR__ . '/i18n';
 $wgRecentChangesFlags = array_merge( array( 'mirrored' => array( 'letter' => 'mirroredletter',

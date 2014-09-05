@@ -41,13 +41,20 @@ class ApiMirrorLogEntry extends ApiBase {
 		if ( $res ) {
 			$this->dieUsage( 'Log id ' . $params['logid'] . ' is already in the logging table' );
 		}
+		if ( $params['rcid'] ) {
+			$conds = array ( 'rc_id' => $params['rcid'] );
+			$res = $dbw->selectRow( 'recentchanges', 'rc_id', $conds );
+			if ( $res ) {
+				$this->dieUsage( 'Rc id ' . $params['rcid'] .
+					' is already in the recentchanges table' );
+			}
+		}
 		$pushTimestamp = wfTimestamp( TS_MW );
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],
 			'log_type' => $params['logtype'],
 			'log_action' => $params['logaction'],
 			'log_timestamp' => $params['logtimestamp'],
-			'log_user' => $params['loguser'],
 			'log_namespace' => $params['lognamespace'],
 			'log_deleted' => $params['logdeleted'],
 			'log_user_text' => $params['logusertext'],
@@ -55,8 +62,47 @@ class ApiMirrorLogEntry extends ApiBase {
 			'log_comment' => $params['logcomment'],
 			'log_params' => $params['logparams'],
 			'log_page' => $params['logpage'],
-			'log_mt_push_timestamp' => $pushTimestamp
+			'log_mt_push_timestamp' => $pushTimestamp,
+			'log_mt_user' => $params['loguser'],
 		);
+		// Insert recentchanges and tags entries, unless rcid param is set to zero
+		if ( $params['rcid'] ) {
+			$insertRecentchangesArray = array(
+				'rc_id' => $params['rcid'],
+				'rc_timestamp' => $params['logtimestamp'],
+				'rc_user' => 0,
+				'rc_user_text' => $params['logusertext'],
+				'rc_namespace' => $params['lognamespace'],
+				'rc_title' => $params['logtitle'],
+				'rc_comment' => $params['logcomment'],
+				'rc_minor' => 0,
+				'rc_bot' => $params['rcbot'],
+				'rc_new' => 0,
+				'rc_cur_id' => $params['logpage'],
+				'rc_this_oldid' => 0,
+				'rc_last_oldid' => 0,
+				'rc_type' => $params['rctype'],
+				'rc_source' => $params['rcsource'],
+				'rc_patrolled' => $params['rcpatrolled'],
+				'rc_ip' => $params['rcip'],
+				'rc_deleted' => $params['logdeleted'],
+				'rc_logid' => $params['logid'],
+				'rc_log_type' => $params['logtype'],
+				'rc_log_action' => $params['logaction'],
+				'rc_params' => $params['logparams'],
+				'rc_mt_push_timestamp' => $pushTimestamp,
+				'rc_mt_user' => $params['loguser']
+			);
+			$dbw->insert( 'recentchanges', $insertRecentchangesArray );
+		}
+		if ( $params['tstags'] ) {
+			$insertTagsummaryArray = array(
+				'ts_rc_id' => $params['rcid'],
+				'ts_rev_id' => $params['revid'],
+				'ts_tags' => $params['tags']
+			);
+			$dbw->insert( 'tag_summary', $insertTagsummaryArray );
+		}
 		$r = array();
 		$r['result'] = 'Success';
 		$r['timestamp'] = $pushTimestamp;
@@ -125,7 +171,31 @@ class ApiMirrorLogEntry extends ApiBase {
 			'token' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_REQUIRED => true
-			)
+			),
+			'rcid' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcbot' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rctype' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcsource' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
+			),
+			'rcpatrolled' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_REQUIRED => true
+			),
+			'rcip' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => ''
+			),
 		);
 	}
 
