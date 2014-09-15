@@ -59,7 +59,7 @@ class ApiMakeRemotelyLive extends ApiBase {
 	}
 	if( $res && $dbw->numRows( $res ) ) {
 	    // Make the revisions remotely live
-	    $dbw->update( 'revision', 'rev_mt_remotely_live=1', $where );
+	    $dbw->update( 'revision', 'rev_mt_ar_page_id=0', $where );
 	    // Make the page remotely live too
 	    $dbw->update( 'page', 'page_mt_remotely_live=1', "page_id=$revPage" );
 	}
@@ -67,8 +67,6 @@ class ApiMakeRemotelyLive extends ApiBase {
 	    $revIds[] = $row->rev_id;
 	}
 	$r = array();
-	#$r['maderemotelylive'] = array();
-	#$r['badrevids'] = array();
 	foreach( $revIdNumbers as $revIdNumber ) {
 	    if ( in_array( $revIdNumber, $revIds ) ) {
 		$r['maderemotelylive'][] = $revIdNumber;

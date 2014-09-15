@@ -60,86 +60,100 @@ class ApiMirrorMove extends ApiBase {
 		// Figure out what namespace it's being moved to; truncate any namespace prefix
 		$moveToNamespace = 0;
 		$moveToTitle = $prefixedMoveTo;
-		foreach( $wgMirrorNamespaces as $mirrorNamespace ) {
-			if ( substr( $prefixedMoveTo, 0, strlen( $mirrorNamespace ) )
+		foreach( $wgNamespacesToTruncate as $namespaceToTruncate ) {
+			if ( substr( $prefixedMoveTo, 0, strlen( $namespaceToTruncate ) )
 				== $namespaceToTruncate ) {
 				$moveToTitle = substr( $prefixedMoveTo,
-				    strlen( $mirrorNamespace ),
+				    strlen( $namespaceToTruncate ),
 				    strlen( $prefixedMoveTo )
-				    - strlen( $mirrorNamespace ) );
-				$moveToNamespace = $mirrorNamespace;
+				    - strlen( $namespaceToTruncate ) );
+				$moveToNamespace = $namespaceToTruncate;
 				break;
 			}
                 }
-		// Get the page ID of the source (i.e. move from) page
-		$sourcePageTitle = Title::makeTitleSafe(
-			$params['lognamespace'],
-			$params['logtitle']
-		);
-		if ( !$sourcePageTitle ) {
-			$this->dieUsage( "Could not retrieve the source page entry" );
-		}
-		$sourcePageId = $sourcePageTitle->getArticleID();
-		$newSourcePageRevPage = $noRedir ? 'rev_mt_former_page' : $params['logpage'];
-		// If there's a merged history of local and remote revisions at the source page,
-		// change the rev_page of the local revisions back to the rev_mt_former_page if
-		// there's no redirect created; otherwise change the rev_page to the redirect page
-		// ID.
-		$res = $dbw->update(
+		// If there's a merged history of local and/or mirrorpagedeleted revisions and
+		// remote revisions at the source page, change the rev_page of the local
+		// revisions to the page ID of the redirect or the next available page_id (if
+		// the redirect was suppressed).
+
+		// First, let's see if there is such a merged history.
+		$localSourcePageExists = false;
+		$res = $dbw->selectField(
 			'revision',
+			'rev_id',
 			array(
-				'rev_page' => 'rev_mt_former_page',
-			),
-			array(
-				'rev_page' => $sourcePageId,
-				"rev_mt_former_page<>''"
+				'rev_page' => $params['logpage'],
+				'(rev_mt_push_timestamp=NULL OR rev_mt_ar_page_id<>0)'
 			)
 		);
-		// If there were any revisions whose rev_page was changed back to
-		// rev_mt_former_page, then also re-create the page entry
-		$existingLocalSourcePageId = null;
-		if ( $dbw->affectedRows() && $noRedir ) {
-			// To find the page_latest, sort descending by timestamp and then rev_id.
-			$rowTimestamp = $dbw->selectField(
-				'revision',
-				'rev_timestamp',
-				array( 'rev_page' => $row->rev_mt_former_page ),
-				__METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC' )
+		// Crappy hack to temporarily store and delete the current page to make way for
+		// the new one; it'll be added back later
+		if ( $res || !$noRedir ) {
+			$tempRow = $dbw->selectRow(
+				'page',
+				'*',
+				array( 'page_id' => $params['logpage'] )
 			);
-			$row = $dbw->selectRow(
+			$dbw->delete( 'page', array( 'page_id' => $params['logpage'] ) );
+		}
+
+		// If so, let's create that page, using the redirect page ID, if it's available.
+		if ( $res ) {
+			$localSourcePageExists = true;
+			$conds = array(
+				'page_namespace' => $params['lognamespace'],
+				'page_title' => $params['logtitle'],
+				'page_counter' => 0,
+				// TODO: Perhaps fix this using WikitextContent's
+				// getRedirectTargetAndText()
+				'page_is_redirect' => 0,
+				'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
+				'page_random' => wfRandom(),
+				'page_touched' => $pushTimestamp,
+				'page_links_updated' => NULL,
+				'page_latest' => 0,
+				'page_len' => 0
+			);
+			if ( $params['redirectpageid'] ) {
+				$conds['page_id'] = $params['redirectpageid'];
+			}
+			$dbw->insert( 'page', $conds );
+			$newSourcePageRevPage = $params['redirectpageid']
+				? $params['redirectpageid']
+				: $dbw->insertId();
+			$res = $dbw->update(
+				'revision',
+				array(
+					'rev_page' => $newSourcePageRevPage,
+				),
+				array(
+					'rev_page' => $params['logpage'],
+					'(rev_mt_push_timestamp=NULL OR rev_mt_ar_page_id<>0)'
+				)
+			);
+			// To find the page_latest, sort descending by timestamp and then rev_id.
+			$latestRow = $dbw->selectRow(
 				'revision',
 				array(
 					'rev_id',
 					'rev_content_model',
-				), array(
-					'rev_page' => $row->rev_mt_former_page,
-					'rev_timestamp' => $rowTimestamp
 				),
+				array( 'rev_page' => $newSourcePageRevPage ),
 				__METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC' )
+				array( 'ORDER BY' => 'rev_timestamp DESC, rev_id DESC' )
 			);
-			$dbw->insert(
+			$dbw->update(
 				'page',
 				array(
-					'page_id' => $row->page_id,
-					'page_namespace' => $params['lognamespace'],
-					'page_title' => $params['logtitle'],
-					'page_counter' => 0,
-					// TODO: Perhaps fix this using WikitextContent's
-					// getRedirectTargetAndText()
-					'page_is_redirect' => 0,
+					'page_id' => $newSourcePageRevPage,
 					'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
-					'page_random' => wfRandom(),
-					'page_touched' => $pushTimestamp,
-					'page_links_updated' => NULL,
-					'page_latest' => $row->rev_id,
-					'page_len' => $row->rev_len,
-					'page_content_model' => $row->rev_content_model,
+					'page_latest' => $latestRow->rev_id,
+					'page_len' => $latestRow->rev_len,
+					'page_content_model' => $latestRow->rev_content_model,
 					'page_lang' => NULL
 				)
 			);
-			$existingLocalSourcePageId = $dbw->insertId();
+			$localSourcePageExists = true;
 		}
 		// Does a page already exist at this target page title and namespace?
 		$alreadyExistingTargetPageId = $dbw->selectField(
@@ -158,7 +172,7 @@ class ApiMirrorMove extends ApiBase {
 				'rev_id',
 				array(
 					'rev_page' => $alreadyExistingTargetPageId,
-					'rev_mt_remotely_live' => 1
+					'rev_mt_ar_page_id' => 0
 				)
 			);
 			$numRevs = $dbw->numRows( $numRevsRes );
@@ -181,17 +195,30 @@ class ApiMirrorMove extends ApiBase {
 			// Make any remotely live revisions that are at that target page not
 			// remotely live anymore. Change the rev_page of the revisions that
 			// already exist at the target to the page ID of the mirrored page. Also
-			// set the rev_mt_former_page in case there's another mirrormove
+			// set the rev_mt_ar_page in case there's another mirrormove
 			// reversing this mirrormove.
+
+			// Take care of the remote revisions; these need a rev_mt_ar_page_id
 			$dbw->update(
 				'revision',
 				array(
-					'rev_page' => $sourcePageId,
-					'rev_mt_former_page' => $alreadyExistingTargetPageId,
-					'rev_mt_remotely_live' => 0
+					'rev_page' => $params['logpage'],
+					'rev_mt_ar_page_id' => $alreadyExistingTargetPageId
 				),
 				array(
-				      'rev_page' => $alreadyExistingTargetPageId
+				      'rev_page' => $alreadyExistingTargetPageId,
+				      'rev_timestamp<>NULL'
+				)
+			);
+			// Take care of the local revisions
+			$dbw->update(
+				'revision',
+				array(
+					'rev_page' => $params['logpage']
+				),
+				array(
+				      'rev_page' => $alreadyExistingTargetPageId,
+				      'rev_timestamp=NULL'
 				)
 			);
 			// Delete the page table entry for the target page.
@@ -200,99 +227,100 @@ class ApiMirrorMove extends ApiBase {
 				array( 'page_id' => $alreadyExistingTargetPageId )
 			);
 		}
-		$mostRecentRevisionRowId = 0;
 		// If a parent ID was given as a parameter, use that
 		if ( $params['nullrevparentid'] ) {
-			$mostRecentRevisionRowId = $dbw->selectField(
+			$mostRecentRevisionRow = $dbw->selectRow(
 				'revision',
-				'rev_text_id',
+				array( 'rev_text_id', 'rev_len', 'rev_sha1', 'rev_content_model',
+				      'rev_content_format' ),
 				array( 'rev_id' => $params['nullrevparentid'] )
 			);
-		}
-		// Sort descending by timestamp, then by rev_id, to find the most recent parent ID
-		if ( !$mostRecentRevisionRowId ) {
-			$mostRecentRevisionRowTimestamp = $dbw->selectField(
+		} else {
+			// Otherwise, sort descending by timestamp, then by rev_id, to find the
+			// most recent parent ID
+			$mostRecentRevisionRow = $dbw->selectRow(
 				'revision',
-				'rev_timestamp',
-				array( 'rev_timestamp < ' . $params['logtimestamp'] . "'" ),
+				array( 'rev_text_id', 'rev_len', 'rev_sha1', 'rev_content_model',
+				      'rev_content_format' ),
+				array(
+				      'rev_timestamp<=' . $params['logtimestamp'] . "'",
+				      'rev_page' => $params['logpage'] ),
 				__METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC' )
-			);
-			$mostRecentRevisionRowId = $dbw->selectField(
-				'revision',
-				'rev_id',
-				array( 'rev_timestamp' => $mostRecentRevisionRowTimestamp ),
-				__METHOD__,
-				array( 'ORDER BY' => 'rev_id DESC' )
+				array( 'ORDER BY' => 'rev_timestamp DESC, rev_id DESC' )
 			);
 		}
-		if ( !$mostRecentRevisionRowId ) {
-			$mostRecentRevisionRowId = 0;
-		}
-		$mostRecentRevisionRowId = selectRow(
-			'revision',
-			'rev_text_id',
-			array( 'rev_id' => $params[''] )
-		);
-		// Create null revision
-		$conds = array(
-			'rev_page' => $sourcePageId,
-			'rev_text_id' => $mostRecentRevisionRowId,
-			'rev_comment' => $params['comment2'],
-			'rev_user' => 0,
-			'rev_user_text' => $params['logusertext'],
-			'rev_timestamp' => $params['logtimestamp'],
-			'rev_minor_edit' => 1,
-			'rev_deleted' => 0,
-			'rev_len' => $mostRecentRevisionRow->rev_len,
-			'rev_parent_id' => $params['rcoldid'],
-			'rev_sha1' => $mostRecentRevisionRow->rev_sha1,
-			'rev_content_model' => $mostRecentRevisionRow->rev_content_model,
-			'rev_content_format' => $mostRecentRevisionRow->rev_content_format,
-			'rev_mt_push_timestamp' => $pushTimestamp,
-			'rev_mt_user' => $params['loguser'],
-			'rev_mt_page' => $params['nullrevid'] ? $sourcePageId : NULL,
-			'rev_mt_remotely_live' => 1
-		);
+		// Create null revision, if we have the null revision ID
 		if ( $params['nullrevid'] ) {
-			$conds['rev_id'] = $params['nullrevid'];
+			$conds = array(
+				'rev_id' => $params['nullrevid'],
+				'rev_page' => $params['logpage'],
+				'rev_text_id' => $mostRecentRevisionRow->rev_text_id,
+				'rev_comment' => $params['comment2'],
+				'rev_user' => 0,
+				'rev_user_text' => $params['logusertext'],
+				'rev_timestamp' => $params['logtimestamp'],
+				'rev_minor_edit' => 1,
+				'rev_deleted' => 0,
+				'rev_len' => $mostRecentRevisionRow->rev_len,
+				'rev_parent_id' => $params['nullrevparentid'],
+				'rev_sha1' => $mostRecentRevisionRow->rev_sha1,
+				'rev_content_model' => $mostRecentRevisionRow->rev_content_model,
+				'rev_content_format' => $mostRecentRevisionRow->rev_content_format,
+				'rev_mt_push_timestamp' => $pushTimestamp,
+				'rev_mt_user' => $params['loguser']
+			);
+			$dbw->insert( 'revision', $conds );
+			$nullRevId = $params['nullrevid'];
 		}
-		$dbw->insert( 'revision', $conds );
-		$nullRevId = $params['nullrevid'] ? $params['nullrevid'] : $dbw->insertId();
 		// To find the page_latest, sort descending by timestamp and then rev_id.
-		$rowTimestamp = $dbw->selectField(
-			'revision',
-			'rev_timestamp',
-			array( 'rev_page' => $row->rev_mt_former_page ),
-			__METHOD__,
-			array( 'ORDER BY' => 'rev_timestamp DESC' )
-		);
-		$row = $dbw->selectRow(
+		$latestRow = $dbw->selectRow(
 			'revision',
 			array(
 				'rev_id',
 				'rev_content_model',
-			), array(
-				'rev_page' => $row->rev_mt_former_page,
-				'rev_timestamp' => $rowTimestamp
+				'rev_len',
 			),
+			array( 'rev_page' => $params['logpage'] ),
 			__METHOD__,
-			array( 'ORDER BY' => 'rev_timestamp DESC' )
+			array( 'ORDER BY' => 'rev_timestamp DESC, rev_id DESC' )
 		);
 		// Change page namespace and title of mirrored source (move from) page
-		$dbw->update(
-			'page',
-			array(
-				'page_namespace' => $moveToNamespace,
-				'page_title' => $moveToTitle,
-				'page_latest' => $row->rev_id,
-			),
-			array(
-				'page_id' => $sourcePageId
-			)
-		);
+		if ( isset( $tempRow ) ) {
+			// Crappy hack; we deleted it earlier to avoid a conflict, so now bring it
+			// back
+			$dbw->insert(
+				'page',
+				array(
+					'page_id' => $params['logpage'],
+					'page_namespace' => $moveToNamespace,
+					'page_title' => $moveToTitle,
+					'page_is_redirect' => $tempRow->page_is_redirect,
+					'page_is_new' => $tempRow->page_is_new,
+					'page_random' => $tempRow->page_random,
+					'page_touched' => $tempRow->page_touched,
+					'page_links_updated' => $tempRow->page_links_updated,
+					'page_latest' => $latestRow->rev_id,
+					'page_len' => $latestRow->rev_len,
+					'page_content_model' => $tempRow->page_content_model,
+					'page_lang' => $tempRow->page_lang,
+				)
+			);
+		} else {
+			$dbw->update(
+				'page',
+				array(
+					'page_namespace' => $moveToNamespace,
+					'page_title' => $moveToTitle,
+					'page_latest' => $latestRow->rev_id,
+					'page_len' => $latestRow->rev_len,
+				),
+				array(
+					'page_id' => $params['logpage']
+				)
+			);
+		}
 		// Create a redirect, if applicable
-		if ( !$noRedir ) {
+		if ( !$noRedir && $params['redirectrevid'] && $params['redirectpageid'] ) {
 			// If there's already local stuff remaining at the source page, then put
 			// the redirect in the appropriate place in that page entry. This may or
 			// may not be the latest revision, since who knows how far behind mirroring
@@ -301,13 +329,13 @@ class ApiMirrorMove extends ApiBase {
 			$redirectPageId = 0;
 			$redirRevIsLatestRev = false;
 			$oldText = "#REDIRECT [[$prefixedMoveTo]]";
-			if( $existingLocalSourcePageId ) {
-				$redirectPageId = $existingLocalSourcePageId;
+			if( $localSourcePageExists ) {
+				$redirectPageId = $revpage;
 				// Find out whether the redirect revision is the latest revision
 				$latestTimestamp = $dbw->selectField(
 					'revision',
 					array( 'rev_timestamp' ),
-					array( 'rev_page' => $existingLocalSourcePageId ),
+					array( 'rev_page' => $newSourcePageRevPage ),
 					__METHOD__,
 					array( 'ORDER BY' => 'rev_timestamp DESC' )
 				);
@@ -317,28 +345,34 @@ class ApiMirrorMove extends ApiBase {
 				}
 			} else {
 				// Otherwise, create a new page entry for the redirect revision
+				$conds = array(
+					'page_namespace' => $params['lognamespace'],
+					'page_title' => $params['logtitle'],
+					'page_counter' => 0,
+					// TODO: Perhaps fix this using WikitextContent's
+					// getRedirectTargetAndText()
+					'page_is_redirect' => 1,
+					'page_is_new' => 1,
+					'page_random' => wfRandom(),
+					'page_touched' => $pushTimestamp,
+					'page_links_updated' => NULL,
+					'page_latest' => 0,
+					'page_len' => strlen( $oldText ),
+					'page_content_model' => $row->rev_content_model,
+					'page_lang' => NULL,
+					'page_mt_remotely_live' => 1
+				);
+				if ( $params['redirectpageid'] ) {
+					$conds['page_id'] = $params['redirectpageid'];
+				} elseif ( $newSourcePageRevPage ) {
+					$conds['page_id'] = $newSourcePageRevPage;
+				}
 				$dbw->insert(
 					'page',
-					array(
-						'page_id' => $params['logpage'],
-						'page_namespace' => $params['lognamespace'],
-						'page_title' => $params['logtitle'],
-						'page_counter' => 0,
-						// TODO: Perhaps fix this using WikitextContent's
-						// getRedirectTargetAndText()
-						'page_is_redirect' => 1,
-						'page_is_new' => 1,
-						'page_random' => wfRandom(),
-						'page_touched' => $pushTimestamp,
-						'page_links_updated' => NULL,
-						'page_latest' => 0,
-						'page_len' => strlen( $oldText ),
-						'page_content_model' => $row->rev_content_model,
-						'page_lang' => NULL,
-						'page_mt_remotely_live' => 1
-					)
+					$conds
 				);
-				$redirectPageId = $params['logpage'];
+				$redirectPageId = $conds['page_id'] ? $conds['page_id']
+					: $dbw->insertId();
 				// Since the page only has one revision (viz. the redirect
 				// revision), the redirect revision must be the latest revision
 				$redirRevIsLatestRev = true;
@@ -354,7 +388,7 @@ class ApiMirrorMove extends ApiBase {
 			$textId = $dbw->insertId();
 			// Insert redirect revision entry
 			$conds = array(
-				'rev_page' => $redirectPageId,
+				'rev_page' => $params['redirectpageid'],
 				'rev_text_id' => $textId,
 				'rev_comment' => $params['comment2'],
 				'rev_user' => 0,
@@ -365,13 +399,11 @@ class ApiMirrorMove extends ApiBase {
 				'rev_len' => strlen( $oldText ),
 				'rev_parent_id' => 0,
 				'rev_sha1' => Revision::base36Sha1( $oldText ),
-				'rev_mt_page' => $redirectPageId,
 				'rev_mt_user' => $params['loguser'],
-				'rev_mt_push_timestamp' => $pushTimestamp,
-				'rev_mt_remotely_live' => 1
+				'rev_mt_push_timestamp' => $pushTimestamp
 			);
-			if ( $params['redirrevid'] ) {
-				$conds['rev_id'] = $params['redirrevid'];
+			if ( $params['redirectrevid'] ) {
+				$conds['rev_id'] = $params['redirectrevid'];
 			}
 			$dbw->insert( 'revision', $conds );
 			$redirectRevisionId = $dbw->insertId();
@@ -382,9 +414,10 @@ class ApiMirrorMove extends ApiBase {
 					'page',
 					array(
 					      'page_latest' => $redirectRevisionId,
-					      'page_is_redirect' => 1
+					      'page_is_redirect' => 1,
+					      'page_content_model' => 'wikitext'
 					),
-					array( 'page_id' => $redirectPageId )
+					array( 'page_id' => $params['redirectpageid'] )
 				);
 			}
 		}
@@ -392,7 +425,7 @@ class ApiMirrorMove extends ApiBase {
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],
 			'log_type' => 'move',
-			'log_action' => 'move',
+			'log_action' => $params['logaction'],
 			'log_timestamp' => $params['logtimestamp'],
 			'log_user' => 0,
 			'log_namespace' => $params['lognamespace'],
@@ -430,7 +463,7 @@ class ApiMirrorMove extends ApiBase {
 			'rc_deleted' => $params['logdeleted'],
 			'rc_logid' => $params['logid'],
 			'rc_log_type' => 'move',
-			'rc_log_action' => 'move',
+			'rc_log_action' => $params['logaction'],
 			'rc_params' => $params['logparams'],
 			'rc_mt_push_timestamp' => $pushTimestamp,
 			'rc_mt_user' => $params['loguser']
@@ -498,6 +531,10 @@ class ApiMirrorMove extends ApiBase {
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_REQUIRED => true,
 			),
+			'logaction' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_REQUIRED => true,
+			),
 			'rcid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_REQUIRED => true,
@@ -530,7 +567,11 @@ class ApiMirrorMove extends ApiBase {
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_DFLT => NULL
 			),
-			'redirrevid' => array(
+			'redirectrevid' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => NULL
+			),
+			'redirectpageid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_DFLT => NULL
 			),

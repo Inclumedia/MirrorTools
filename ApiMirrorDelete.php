@@ -58,49 +58,47 @@ class ApiMirrorDelete extends ApiBase {
 		$dbw->update(
 			'revision',
 			array(
-				'rev_mt_remotely_live' => 0
+				'rev_mt_ar_page' => $params['pageid']
 			),
 			array(
 				'rev_page' => $params['pageid']
 			)
 		);
-		if ( $dbw->affectedRows() ) {
-			// Update the page table entry for the deleted page, to make it not remotely live.
-			$dbw->update(
-				'page',
-				array( 'page_mt_remotely_live' => 0 ),
-				array( 'page_id' => $sourcePageId )
-			);
-			// To find the most recent revision, sort descending by timestamp and then rev_id.
-			$rowTimestamp = $dbw->selectField(
-				'revision',
-				'rev_timestamp',
-				array(
-				      'rev_page' => $params['pageid'],
-				      "rev_timestamp<=" . $params['logtimestamp']
-				),
-				__METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC' )
-			);
-			$mostRecentRevisionRow = $dbw->selectRow(
-				'revision',
-				array(
-					'rev_id',
-					'rev_content_model',
-				), array(
-					'rev_page' => $params['pageid'],
-					'rev_timestamp' => $rowTimestamp
-				),
-				__METHOD__,
-				array( 'ORDER BY' => 'rev_id DESC' )
-			);
-			// Set page_latest to the latest revision
-			$dbw->update(
-				'page',
-				array( 'page_latest' => $mostRecentRevisionRow->rev_id ),
-				array( 'page_id' => $params['pageid'] )
-			);
-		}
+		// Update the page table entry for the deleted page, to make it not remotely live.
+		$dbw->update(
+			'page',
+			array( 'page_mt_remotely_live' => 0 ),
+			array( 'page_id' => $sourcePageId )
+		);
+		// To find the most recent revision, sort descending by timestamp and then rev_id.
+		$rowTimestamp = $dbw->selectField(
+			'revision',
+			'rev_timestamp',
+			array(
+			      'rev_page' => $params['pageid'],
+			      "rev_timestamp<=" . $params['logtimestamp']
+			),
+			__METHOD__,
+			array( 'ORDER BY' => 'rev_timestamp DESC' )
+		);
+		$mostRecentRevisionRow = $dbw->selectRow(
+			'revision',
+			array(
+				'rev_id',
+				'rev_content_model',
+			), array(
+				'rev_page' => $params['pageid'],
+				'rev_timestamp' => $rowTimestamp
+			),
+			__METHOD__,
+			array( 'ORDER BY' => 'rev_id DESC' )
+		);
+		// Set page_latest to the latest revision
+		$dbw->update(
+			'page',
+			array( 'page_latest' => $mostRecentRevisionRow->rev_id ),
+			array( 'page_id' => $params['pageid'] )
+		);
 		// Insert log entry
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],

@@ -118,8 +118,8 @@ class MirrorTools {
                 $updater->addExtensionUpdate( array( 'modifyField', 'user', 'user_id',
                         dirname( __FILE__ ) . '/patches/patch-user_id-one-quadrillion.sql', true ) );
 		// Remote wiki page ID
-		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_page',
-                        dirname( __FILE__ ) . '/patches/patch-rev_mt_page.sql', true ) );
+		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_ar_page_id',
+                        dirname( __FILE__ ) . '/patches/patch-rev_mt_ar_page_id.sql', true ) );
 		// Remote wiki user ID for log event
 		$updater->addExtensionUpdate( array( 'addField', 'logging', 'log_mt_user',
                         dirname( __FILE__ ) . '/patches/patch-log_mt_user.sql', true ) );
@@ -129,15 +129,9 @@ class MirrorTools {
 		// Remote wiki user ID for revision
 		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_user',
                         dirname( __FILE__ ) . '/patches/patch-rev_mt_user.sql', true ) );
-		// rev_page from before the revisions were merged into the page history of the mirrored page
-		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_former_page',
-                        dirname( __FILE__ ) . '/patches/patch-rev_mt_former_page.sql', true ) );
 		// Does the page have revisions that are live on the remote wiki? (if not, then 0)
 		$updater->addExtensionUpdate( array( 'addField', 'page', 'page_mt_remotely_live',
                         dirname( __FILE__ ) . '/patches/patch-page_mt_remotely_live.sql', true ) );
-		// Is the revision live on the remote wiki? (if deleted or nonexistent remotely, then 0)
-		$updater->addExtensionUpdate( array( 'addField', 'revision', 'rev_mt_remotely_live',
-                        dirname( __FILE__ ) . '/patches/patch-rev_mt_remotely_live.sql', true ) );
 		// Timestamp the log entry was mirrorpushed
 		$updater->addExtensionUpdate( array( 'addField', 'logging', 'log_mt_push_timestamp',
                         dirname( __FILE__ ) . '/patches/patch-log_mt_push_timestamp.sql', true ) );
@@ -290,5 +284,112 @@ class MirrorTools {
 		unset( $links['actions']['protect'] );
 		unset( $links['views']['edit'] );
 		return true;
+	}
+
+	// Abort a locally-initiated page move if either the source or destination title is
+	// remotely live
+	public static function onAbortMove( Title $oldTitle, Title $newTitle, User $user,
+		&$error, $reason ) {
+		$dbw = wfGetDB( DB_MASTER );
+		$oldRemotelyLive = $dbr->selectField(
+			'page',
+			'page_mt_remotely_live',
+			array( 'page_id' => $oldTitle->getArticleID() )
+		);
+		if ( $oldRemotelyLive ) {
+			$error = wfMessage( 'cant-move-from-remotely-live-page' );
+			return false;
+		}
+		$newRemotelyLive = $dbr->selectField(
+			'page',
+			'page_mt_remotely_live',
+			array(
+			      'page_namespace' => $newTitle->getNamespace(),
+			      'page_title' => $newTitle->getDBKey()
+			)
+		);
+		if ( $newRemotelyLive ) {
+			$error = wfMessage( 'cant-move-to-remotely-live-page' );
+			return false;
+		}
+	}
+
+	public static function onTitleMoveComplete( &$title, &$newtitle, &$user, $oldid, $newid,
+		$reason ) {
+		$pushTimestamp = wfTimestamp( TS_MW );
+		// When a move is made from a page that has remotely deleted revisions, create a
+		// new page entry for those revisions.
+		$dbw = wfGetDB( DB_MASTER );
+		// First see if there are remotely deleted revisions at that source page
+		$options = $newid ? array( 'ORDER BY' => 'rev_timestamp DESC' ) : array();
+		$latestTimestamp = $dbw->selectField(
+			'revision',
+			array( 'rev_timestamp' ),
+			array(
+			      'rev_page' => $oldid,
+			      'rev_ar_page_id<>NULL'
+			), __METHOD__,
+			$options
+		);
+
+		if ( $latestTimestamp ) {
+			// If there are indeed remotely deleted revision at that source page, and
+			// if no redirect was created, then get the latest revision and use that
+			// rev_id as the page_latest.
+			if( !$newid ) {
+				// Since we already have the timestamp, now sort descending by
+				// rev_id.
+				$latestRow = $dbw->selectRow(
+					'revision',
+					array(
+						'rev_id',
+						'rev_timestamp',
+						'rev_text_id',
+						'rev_content_model'
+					), array(
+						'rev_page' => $oldid,
+						'rev_ar_page_id<>NULL',
+						'rev_timestamp' => $latestTimestamp,
+					), __METHOD__,
+					array( 'ORDER BY' => 'rev_id DESC' )
+				);
+				// Get the text of the latest revision, to see if it's a redirect
+				// TODO: Make this compatible with external storage
+				$text = $dbw->selectField(
+					'text',
+					'old_text',
+					array( 'old_id' => $latestRow->rev_text_id )
+				);
+				// Create the new page
+				$dbw->insert(
+					'page',
+					array(
+						'page_namespace' => $title->getNamespace(),
+						'page_title' => $title->getDBKey(),
+						'page_is_redirect' =>
+							MirrorTools::getRedirectTarget( $text ),
+						'page_is_new' => 1,
+						'page_random' => wfRandom(),
+						'page_touched' => $pushTimestamp,
+						'page_links_updated' => NULL,
+						'page_latest' => $latestRow->rev_id,
+						'page_len' => strlen( $text ),
+						'page_content_model' =>
+							$latestRow->rev_content_model
+					)
+				);
+				$insertId = $dbw->insertId();
+			}
+			// Set those mirrordeleted revisions' rev_id to either the insert ID or
+			// the redirect page_id.
+			$dbw->update(
+				'revision',
+				array( 'rev_page' => $newid ? $newid : $insertId ),
+				array(
+				      'rev_page' => $oldId,
+				      'rev_ar_page_id<>NULL'
+				)
+			);
+		}
 	}
 }

@@ -49,8 +49,6 @@ $wgAPIModules['makeremotelylive'] = 'ApiMakeRemotelyLive';
 $wgHooks['LoadExtensionSchemaUpdates'][] = 'MirrorTools::SchemaUpdates';
 $wgMirrorEditParams = array();
 $wgGroupPermissions['user']['mirrortools'] = true;
-$wgSpecialPages[ 'DeleteMirrored' ] = 'SpecialDeleteMirrored';
-$wgAutoloadClasses[ 'SpecialDeleteMirrored' ] = __DIR__ . "/SpecialDeleteMirrored.php";
 $wgNamespacesToTruncate = array(
     1 => 'Talk:',
     2 => 'User:',
@@ -94,6 +92,8 @@ $wgHooks['OldChangesListLogFlags'][] = 'MirrorTools::oldChangesListLogFlags';
 $wgHooks['SkinTemplateNavigation'][] = 'MirrorTools::onSkinTemplateNavigation';
 $wgHooks['ArticlePageDataBefore'][] = 'MirrorTools::onArticlePageDataBefore';
 $wgHooks['ArticlePageDataAfter'][] = 'MirrorTools::onArticlePageDataAfter';
+$wgHooks['AbortMove'][] = 'MirrorTools::onAbortMove';
+$wgHooks['TitleMoveComplete'][] = 'MirrorTools::onTitleMoveComplete';
 $wgMirrorToolsPageRemotelyLive = false;
 $wgMirrorToolsEditRemoteWikiUrl = 'http://simple.wikipedia.org/w/index.php?title=$1&action=edit';
 $wgMirrorToolsMoveRemoteWikiUrl = 'http://simple.wikipedia.org/wiki/Special:MovePage/$1';

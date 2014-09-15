@@ -7,5 +7,7 @@
     "mirroredletter": "W",
     "editonremotewiki": "Edit on Wikipedia",
     "moveonremotewiki": "Move on Wikipedia",
-    "recentchanges-label-mirrored": "This change is mirrored from Wikimedia"
+    "recentchanges-label-mirrored": "This change is mirrored from Wikimedia",
+    "cant-move-from-remotely-live-page": "The source page is remotely live.",
+    "cant-move-to-remotely-live-page": "The target page is remotely live."
 }

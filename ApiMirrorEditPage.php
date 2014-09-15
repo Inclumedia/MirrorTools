@@ -85,7 +85,6 @@ class ApiMirrorEditPage extends ApiBase {
 			$dbw->update(
 				'revision',
 				array(
-					'rev_mt_former_page' => 'rev_page',
 					'rev_page' => $pageId
 				),
 				array( 'rev_page' => $res->page_id )
@@ -149,10 +148,8 @@ class ApiMirrorEditPage extends ApiBase {
 			'rev_sha1' => $params['revsha1'],
 			'rev_content_model' => $params['revcontentmodel'],
 			'rev_content_format' => $params['revcontentformat'],
-			'rev_mt_page' => $params['revpage'],
 			'rev_mt_user' => $params['revuser'],
 			'rev_mt_push_timestamp' => $pushTimestamp,
-			'rev_mt_remotely_live' => 1
 		);
 		$dbw->insert( 'revision', $insertRevisionArray );
 		$revId = $dbw->insertId();
