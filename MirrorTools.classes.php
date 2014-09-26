@@ -286,6 +286,25 @@ class MirrorTools {
 		return true;
 	}
 
+	public static function getMoveTo( $moveToNamespace, $moveToTitle ) {
+		global $wgNamespacesToTruncate;
+		foreach( $wgNamespacesToTruncate as $namespaceToTruncate ) {
+			if ( substr( $prefixedMoveTo, 0, strlen( $namespaceToTruncate ) )
+				== $namespaceToTruncate ) {
+				$moveToTitle = substr( $prefixedMoveTo,
+				    strlen( $namespaceToTruncate ),
+				    strlen( $prefixedMoveTo )
+				    - strlen( $namespaceToTruncate ) );
+				$moveToNamespace = $namespaceToTruncate;
+				break;
+			}
+                }
+		return array(
+			'namespace' => $moveToNamespace,
+			'title' => $moveToTitle
+		);
+	}
+
 	// Abort a locally-initiated page move if either the source or destination title is
 	// remotely live
 	public static function onAbortMove( Title $oldTitle, Title $newTitle, User $user,

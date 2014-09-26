@@ -58,19 +58,9 @@ class ApiMirrorMove extends ApiBase {
 		$prefixedMoveTo = $logParams['4::target'];
 		$noRedir = $logParams['5::noredir'] == '1' ? true : false;
 		// Figure out what namespace it's being moved to; truncate any namespace prefix
-		$moveToNamespace = 0;
-		$moveToTitle = $prefixedMoveTo;
-		foreach( $wgNamespacesToTruncate as $namespaceToTruncate ) {
-			if ( substr( $prefixedMoveTo, 0, strlen( $namespaceToTruncate ) )
-				== $namespaceToTruncate ) {
-				$moveToTitle = substr( $prefixedMoveTo,
-				    strlen( $namespaceToTruncate ),
-				    strlen( $prefixedMoveTo )
-				    - strlen( $namespaceToTruncate ) );
-				$moveToNamespace = $namespaceToTruncate;
-				break;
-			}
-                }
+		$moveToArr = MirrorTools::getMoveTo( 0, $prefixedMoveTo );
+		$moveToNamespace = $moveToArr['namespace'];
+		$moveToTitle = $moveToArr['title'];
 		// If there's a merged history of local and/or mirrorpagedeleted revisions and
 		// remote revisions at the source page, change the rev_page of the local
 		// revisions to the page ID of the redirect or the next available page_id (if
@@ -101,22 +91,20 @@ class ApiMirrorMove extends ApiBase {
 		if ( $res ) {
 			$localSourcePageExists = true;
 			$conds = array(
+				'page_id' => $params['redirectpageid'],
 				'page_namespace' => $params['lognamespace'],
 				'page_title' => $params['logtitle'],
 				'page_counter' => 0,
 				// TODO: Perhaps fix this using WikitextContent's
 				// getRedirectTargetAndText()
 				'page_is_redirect' => 0,
-				'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
+				#'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
 				'page_random' => wfRandom(),
 				'page_touched' => $pushTimestamp,
 				'page_links_updated' => NULL,
 				'page_latest' => 0,
 				'page_len' => 0
 			);
-			if ( $params['redirectpageid'] ) {
-				$conds['page_id'] = $params['redirectpageid'];
-			}
 			$dbw->insert( 'page', $conds );
 			$newSourcePageRevPage = $params['redirectpageid']
 				? $params['redirectpageid']
@@ -137,6 +125,7 @@ class ApiMirrorMove extends ApiBase {
 				array(
 					'rev_id',
 					'rev_content_model',
+					'rev_len',
 				),
 				array( 'rev_page' => $newSourcePageRevPage ),
 				__METHOD__,
@@ -146,7 +135,7 @@ class ApiMirrorMove extends ApiBase {
 				'page',
 				array(
 					'page_id' => $newSourcePageRevPage,
-					'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
+					#'page_is_new' => $dbw->affectedRows() > 1 ? 0 : 1,
 					'page_latest' => $latestRow->rev_id,
 					'page_len' => $latestRow->rev_len,
 					'page_content_model' => $latestRow->rev_content_model,
@@ -227,50 +216,34 @@ class ApiMirrorMove extends ApiBase {
 				array( 'page_id' => $alreadyExistingTargetPageId )
 			);
 		}
-		// If a parent ID was given as a parameter, use that
-		if ( $params['nullrevparentid'] ) {
-			$mostRecentRevisionRow = $dbw->selectRow(
-				'revision',
-				array( 'rev_text_id', 'rev_len', 'rev_sha1', 'rev_content_model',
-				      'rev_content_format' ),
-				array( 'rev_id' => $params['nullrevparentid'] )
-			);
-		} else {
-			// Otherwise, sort descending by timestamp, then by rev_id, to find the
-			// most recent parent ID
-			$mostRecentRevisionRow = $dbw->selectRow(
-				'revision',
-				array( 'rev_text_id', 'rev_len', 'rev_sha1', 'rev_content_model',
-				      'rev_content_format' ),
-				array(
-				      'rev_timestamp<=' . $params['logtimestamp'] . "'",
-				      'rev_page' => $params['logpage'] ),
-				__METHOD__,
-				array( 'ORDER BY' => 'rev_timestamp DESC, rev_id DESC' )
-			);
-		}
 		// Create null revision, if we have the null revision ID
 		if ( $params['nullrevid'] ) {
-			$conds = array(
+			$dbw->insert(
+				'text',
+				array(
+					'old_text' => $params['oldtext'],
+					'old_flags' => 'utf-8'
+				)
+			);
+			$textId = $dbw->insertId();
+			$dbw->insert( 'revision', array(
 				'rev_id' => $params['nullrevid'],
 				'rev_page' => $params['logpage'],
-				'rev_text_id' => $mostRecentRevisionRow->rev_text_id,
+				'rev_text_id' => $textId,
 				'rev_comment' => $params['comment2'],
 				'rev_user' => 0,
 				'rev_user_text' => $params['logusertext'],
 				'rev_timestamp' => $params['logtimestamp'],
 				'rev_minor_edit' => 1,
 				'rev_deleted' => 0,
-				'rev_len' => $mostRecentRevisionRow->rev_len,
+				'rev_len' => strlen( $oldtext ),
 				'rev_parent_id' => $params['nullrevparentid'],
-				'rev_sha1' => $mostRecentRevisionRow->rev_sha1,
-				'rev_content_model' => $mostRecentRevisionRow->rev_content_model,
-				'rev_content_format' => $mostRecentRevisionRow->rev_content_format,
+				'rev_sha1' => Revision::base36Sha1( $oldtext ),
+				#'rev_content_model' => $mostRecentRevisionRow->rev_content_model,
+				#'rev_content_format' => $mostRecentRevisionRow->rev_content_format,
 				'rev_mt_push_timestamp' => $pushTimestamp,
 				'rev_mt_user' => $params['loguser']
-			);
-			$dbw->insert( 'revision', $conds );
-			$nullRevId = $params['nullrevid'];
+			) );
 		}
 		// To find the page_latest, sort descending by timestamp and then rev_id.
 		$latestRow = $dbw->selectRow(
@@ -328,7 +301,7 @@ class ApiMirrorMove extends ApiBase {
 			$parentId = 0;
 			$redirectPageId = 0;
 			$redirRevIsLatestRev = false;
-			$oldText = "#REDIRECT [[$prefixedMoveTo]]";
+			$oldText2 = $params['oldtext2'];
 			if( $localSourcePageExists ) {
 				$redirectPageId = $revpage;
 				// Find out whether the redirect revision is the latest revision
@@ -357,7 +330,7 @@ class ApiMirrorMove extends ApiBase {
 					'page_touched' => $pushTimestamp,
 					'page_links_updated' => NULL,
 					'page_latest' => 0,
-					'page_len' => strlen( $oldText ),
+					'page_len' => strlen( $oldText2 ),
 					'page_content_model' => $row->rev_content_model,
 					'page_lang' => NULL,
 					'page_mt_remotely_live' => 1
@@ -381,13 +354,14 @@ class ApiMirrorMove extends ApiBase {
 			$dbw->insert(
 				'text',
 				array(
-					'old_text' => $oldText,
+					'old_text' => $oldText2,
 					'old_flags' => 'utf-8'
 				)
 			);
 			$textId = $dbw->insertId();
 			// Insert redirect revision entry
 			$conds = array(
+				'rev_id' => $params['redirectrevid'],
 				'rev_page' => $params['redirectpageid'],
 				'rev_text_id' => $textId,
 				'rev_comment' => $params['comment2'],
@@ -396,17 +370,14 @@ class ApiMirrorMove extends ApiBase {
 				'rev_timestamp' => $params['logtimestamp'],
 				'rev_minor_edit' => 0,
 				'rev_deleted' => 0,
-				'rev_len' => strlen( $oldText ),
+				'rev_len' => strlen( $oldText2 ),
 				'rev_parent_id' => 0,
-				'rev_sha1' => Revision::base36Sha1( $oldText ),
+				'rev_sha1' => Revision::base36Sha1( $oldText2 ),
 				'rev_mt_user' => $params['loguser'],
 				'rev_mt_push_timestamp' => $pushTimestamp
 			);
-			if ( $params['redirectrevid'] ) {
-				$conds['rev_id'] = $params['redirectrevid'];
-			}
 			$dbw->insert( 'revision', $conds );
-			$redirectRevisionId = $dbw->insertId();
+			$redirectRevisionId = $params['redirectrevid'];
 			// Set page_latest to the redirect revision entry, if that's the latest
 			// revision
 			if ( $redirRevIsLatestRev ) {
@@ -573,6 +544,14 @@ class ApiMirrorMove extends ApiBase {
 			),
 			'redirectpageid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => NULL
+			),
+			'oldtext' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => NULL
+			),
+			'oldtext2' => array(
+				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => NULL
 			),
 			'token' => array(

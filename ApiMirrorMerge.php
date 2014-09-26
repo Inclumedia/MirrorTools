@@ -1,8 +1,8 @@
 <?php
 /**
  *
- * ApiMirrorLogEntry
- * Created on 13 July 2014 by Nathan Larson
+ * ApiMirrorMerge
+ * Created on 17 September 2014 by Nathan Larson
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,11 @@
  */
 
 /**
- * A module that allows for mirroring log entries.
+ * A module that allows for mirroring history merges
  *
  * @ingroup API
  */
-class ApiMirrorLogEntry extends ApiBase {
+class ApiMirrorMerge extends ApiBase {
 	public function execute() {
 		$user = $this->getUser();
 		if ( !$user->isAllowed( 'mirrortools' ) ) {
@@ -50,10 +50,36 @@ class ApiMirrorLogEntry extends ApiBase {
 			}
 		}
 		$pushTimestamp = wfTimestamp( TS_MW );
+		$explodedParams = explode( "\n", $params['logparams'] );
+		$target = $explodedParams[0];
+		$mergeTimestamp = $explodedParams[1];
+		$mergeArr = MirrorTools::getMoveTo( 0, $target );
+		$mergeToNamespace = $mergeArr['namespace'];
+		$mergeToTitle = $mergeArr['title'];
+		$mergeToPageId = $dbw->selectField(
+			'page',
+			'page_id',
+			array(
+				'page_namespace' => $mergeToNamespace,
+				'page_title' => $mergeToTitle,
+			)
+		);
+		if ( !$mergeToPageId ) {
+			$this->dieUsage( "Merge target page $target was not found" );
+		}
+		$dbw->update(
+			'revision',
+			array( 'rev_page' => $mergeToPageId ),
+			array(
+			      'rev_page' => $params['logpage'],
+			      "rev_timestamp<$mergeTimestamp"
+			)
+		);
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],
 			'log_type' => $params['logtype'],
 			'log_action' => $params['logaction'],
+			'log_user' => 0,
 			'log_timestamp' => $params['logtimestamp'],
 			'log_namespace' => $params['lognamespace'],
 			'log_deleted' => $params['logdeleted'],
@@ -66,36 +92,34 @@ class ApiMirrorLogEntry extends ApiBase {
 			'log_mt_user' => $params['loguser'],
 		);
 		$dbw->insert( 'logging', $insertLoggingArray );
-		// Insert recentchanges and tags entries, unless rcid param is set to zero
-		if ( $params['rcid'] ) {
-			$insertRecentchangesArray = array(
-				'rc_id' => $params['rcid'],
-				'rc_timestamp' => $params['logtimestamp'],
-				'rc_user' => 0,
-				'rc_user_text' => $params['logusertext'],
-				'rc_namespace' => $params['lognamespace'],
-				'rc_title' => $params['logtitle'],
-				'rc_comment' => $params['logcomment'],
-				'rc_minor' => 0,
-				'rc_bot' => $params['rcbot'],
-				'rc_new' => 0,
-				'rc_cur_id' => $params['logpage'],
-				'rc_this_oldid' => 0,
-				'rc_last_oldid' => 0,
-				'rc_type' => 3,
-				'rc_source' => $params['rcsource'],
-				'rc_patrolled' => $params['rcpatrolled'],
-				'rc_ip' => $params['rcip'],
-				'rc_deleted' => $params['logdeleted'],
-				'rc_logid' => $params['logid'],
-				'rc_log_type' => $params['logtype'],
-				'rc_log_action' => $params['logaction'],
-				'rc_params' => $params['logparams'],
-				'rc_mt_push_timestamp' => $pushTimestamp,
-				'rc_mt_user' => $params['loguser']
-			);
-			$dbw->insert( 'recentchanges', $insertRecentchangesArray );
-		}
+		// Insert recentchanges and tags entries
+		$insertRecentchangesArray = array(
+			'rc_id' => $params['rcid'],
+			'rc_timestamp' => $params['logtimestamp'],
+			'rc_user' => 0,
+			'rc_user_text' => $params['logusertext'],
+			'rc_namespace' => $params['lognamespace'],
+			'rc_title' => $params['logtitle'],
+			'rc_comment' => $params['logcomment'],
+			'rc_minor' => 0,
+			'rc_bot' => $params['rcbot'],
+			'rc_new' => 0,
+			'rc_cur_id' => $params['logpage'],
+			'rc_this_oldid' => 0,
+			'rc_last_oldid' => 0,
+			'rc_type' => 3,
+			'rc_source' => $params['rcsource'],
+			'rc_patrolled' => $params['rcpatrolled'],
+			'rc_ip' => $params['rcip'],
+			'rc_deleted' => $params['logdeleted'],
+			'rc_logid' => $params['logid'],
+			'rc_log_type' => $params['logtype'],
+			'rc_log_action' => $params['logaction'],
+			'rc_params' => $params['logparams'],
+			'rc_mt_push_timestamp' => $pushTimestamp,
+			'rc_mt_user' => $params['loguser']
+		);
+		$dbw->insert( 'recentchanges', $insertRecentchangesArray );
 		if ( $params['tstags'] ) {
 			$insertTagsummaryArray = array(
 				'ts_rc_id' => $params['rcid'],
@@ -104,8 +128,7 @@ class ApiMirrorLogEntry extends ApiBase {
 			);
 			$dbw->insert( 'tag_summary', $insertTagsummaryArray );
 		}
-		// Insert null revision
-		if ( $params['nullrevid'] && $params['oldtext'] ) {
+		if ( $params['redirectrevid'] ) {
 			$dbw->insert(
 				'text',
 				array(
@@ -114,24 +137,25 @@ class ApiMirrorLogEntry extends ApiBase {
 				)
 			);
 			$textId = $dbw->insertId();
-			$dbw->insert( 'revision', array(
-				'rev_id' => $params['nullrevid'],
-				'rev_page' => $params['logpage'],
-				'rev_text_id' => $textId,
-				'rev_comment' => $params['comment2'],
-				'rev_user' => 0,
-				'rev_user_text' => $params['logusertext'],
-				'rev_timestamp' => $params['logtimestamp'],
-				'rev_minor_edit' => 1,
-				'rev_deleted' => 0,
-				'rev_len' => strlen( $params['oldtext'] ),
-				'rev_parent_id' => $params['nullrevparentid'],
-				'rev_sha1' => Revision::base36Sha1( $params['oldtext'] ),
-				'rev_mt_push_timestamp' => $pushTimestamp,
-				'rev_mt_user' => $params['loguser'],
-				'rev_content_model' => $params['contentmodel'],
-				'rev_content_format' => $params['contentformat']
-			) );
+			$dbw->insert(
+				'revision',
+				array(
+					'rev_id' => $params['redirectrevid'],
+					'rev_page' => $params['logpage'],
+					'rev_text_id' => $textId,
+					'rev_comment' => $params['comment2'],
+					'rev_user' => 0,
+					'rev_user_text' => $params['logusertext'],
+					'rev_timestamp' => $params['logtimestamp'],
+					'rev_minor_edit' => 0,
+					'rev_deleted' => 0,
+					'rev_len' => strlen( $params['oldtext'] ),
+					'rev_parent_id' => 0,
+					'rev_sha1' => Revision::base36Sha1( $params['oldtext'] ),
+					'rev_mt_user' => $params['loguser'],
+					'rev_mt_push_timestamp' => $pushTimestamp
+				)
+			);
 			// To find the page_latest, sort descending by timestamp and then rev_id.
 			$latestRow = $dbw->selectRow(
 				'revision',
@@ -145,7 +169,7 @@ class ApiMirrorLogEntry extends ApiBase {
 				array( 'ORDER BY' => 'rev_timestamp DESC, rev_id DESC' )
 			);
 			// Only update it if this new row is the latest
-			if ( $latestRow->rev_id === $params['nullrevid'] ) {
+			if ( $latestRow->rev_id === $params['redirectrevid'] ) {
 				$dbw->update(
 					'page',
 					array(
@@ -251,22 +275,18 @@ class ApiMirrorLogEntry extends ApiBase {
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => ''
 			),
-			'nullrevid' => array(
+			'redirectrevid' => array(
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_DFLT => 0,
 			),
-			'nullrevparentid' => array(
-				ApiBase::PARAM_TYPE => 'integer',
-				ApiBase::PARAM_DFLT => 0,
+			'comment2' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => '',
 			),
 			'oldtext' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => '',
 			),
-			'comment2' => array(
-				ApiBase::PARAM_TYPE => 'string',
-				ApiBase::PARAM_DFLT => '',
-			)
 		);
 	}
 
@@ -277,11 +297,11 @@ class ApiMirrorLogEntry extends ApiBase {
 	public function mustBePosted() {
 		return true;
 	}
-	
+
 	public function needsToken() {
 		return true;
 	}
-	
+
 	public function getTokenSalt() {
 		return '';
 	}
