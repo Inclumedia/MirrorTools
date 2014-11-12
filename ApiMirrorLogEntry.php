@@ -33,7 +33,16 @@ class ApiMirrorLogEntry extends ApiBase {
 		if ( !$user->isAllowed( 'mirrortools' ) ) {
 			$this->dieUsage( 'Access denied: This user does not have the mirrortools right' );
 		}
-		$params = $this->extractRequestParams();
+		ApiMirrorLogEntry::doLogEntryEntry();
+	}
+
+	public function doLogEntry( $params = null, $pushTimestamp = null, $returnResult = false ) {
+		if ( !$params ) {
+			$params = $this->extractRequestParams();
+		}
+		if ( !$pushTimestamp ) {
+			$pushTimestamp = wfTimestamp( TS_MW );
+		}
 		$dbw = wfGetDB( DB_MASTER );
 		// See if this data is already in the tables
 		$conds = array ( 'log_id' => $params['logid'] );
@@ -49,7 +58,17 @@ class ApiMirrorLogEntry extends ApiBase {
 					' is already in the recentchanges table' );
 			}
 		}
-		$pushTimestamp = wfTimestamp( TS_MW );
+		if ( $params['nullrevid'] ) {
+			$res = $dbw->selectRow(
+				'revision',
+				'rev_id',
+				array( 'rev_id' => $params['nullrevid'] )
+			);
+			if ( $res ) {
+				$this->dieUsage( 'Rev id ' . $params['nullrevid'] .
+					' is already in the revision table' );
+			}
+		}
 		$insertLoggingArray = array(
 			'log_id' => $params['logid'],
 			'log_type' => $params['logtype'],
@@ -118,15 +137,15 @@ class ApiMirrorLogEntry extends ApiBase {
 				'rev_id' => $params['nullrevid'],
 				'rev_page' => $params['logpage'],
 				'rev_text_id' => $textId,
-				'rev_comment' => $params['comment2'],
+				'rev_comment' => $params['nullrevcomment'],
 				'rev_user' => 0,
 				'rev_user_text' => $params['logusertext'],
 				'rev_timestamp' => $params['logtimestamp'],
 				'rev_minor_edit' => 1,
 				'rev_deleted' => 0,
-				'rev_len' => strlen( $params['oldtext'] ),
+				'rev_len' => $params['nullrevsize'],
 				'rev_parent_id' => $params['nullrevparentid'],
-				'rev_sha1' => Revision::base36Sha1( $params['oldtext'] ),
+				'rev_sha1' => $params['nullrevsize'],
 				'rev_mt_push_timestamp' => $pushTimestamp,
 				'rev_mt_user' => $params['loguser'],
 				'rev_content_model' => $params['contentmodel'],
@@ -162,6 +181,9 @@ class ApiMirrorLogEntry extends ApiBase {
 		$r['result'] = 'Success';
 		$r['timestamp'] = $pushTimestamp;
 		$this->getResult()->addValue( null, $this->getModuleName(), $r );
+		if ( $returnResult ) {
+			return $r;
+		}
 		return true;
 	}
 
@@ -259,13 +281,41 @@ class ApiMirrorLogEntry extends ApiBase {
 				ApiBase::PARAM_TYPE => 'integer',
 				ApiBase::PARAM_DFLT => 0,
 			),
+			'nullrevtimestamp' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
+			),
+			'nullrevsize' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
+			),
+			'nullrevtimestamp' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
+			),
+			'nullrevsha1' => array(
+				ApiBase::PARAM_TYPE => 'string',
+				ApiBase::PARAM_DFLT => 0,
+			),
+			'nullrevtimestamp' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
+			),
+			'nullrevdeleted' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
+			),
 			'oldtext' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => '',
 			),
-			'comment2' => array(
+			'nullrevcomment' => array(
 				ApiBase::PARAM_TYPE => 'string',
 				ApiBase::PARAM_DFLT => '',
+			),
+			'uploadincomplete' => array(
+				ApiBase::PARAM_TYPE => 'integer',
+				ApiBase::PARAM_DFLT => 0,
 			)
 		);
 	}

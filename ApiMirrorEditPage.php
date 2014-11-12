@@ -58,6 +58,11 @@ class ApiMirrorEditPage extends ApiBase {
 			$this->dieUsage( 'Rc id ' . $params['rcid'] .
 				' is already in the recentchanges table' );
 		}
+		$this->doMirrorEdit( $params );
+	}
+
+	public function doMirrorEdit( $params ) {
+		$dbw = wfGetDB( DB_MASTER );
 		// See if this page title and namespace are in the page table
 		$conds = array (
 			'page_title' => $params['rctitle'],
