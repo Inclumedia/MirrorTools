@@ -247,6 +247,13 @@ class MirrorTools {
 		}
 	}
 
+	public static function getContentModel( $text ) {
+		if ( $text === 'wikitext' ) {
+			$text = NULL;
+		}
+		return $text;
+	}
+
 	public static function onArticlePageDataBefore( $article, $fields ) {
 		$fields[] = 'page_mt_remotely_live';
 	}

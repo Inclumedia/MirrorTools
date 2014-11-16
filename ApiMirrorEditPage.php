@@ -37,12 +37,11 @@ class ApiMirrorEditPage extends ApiBase {
 		$params = $this->extractRequestParams();
 		$params['rctitle'] = str_replace( ' ', '_', $params['rctitle'] );
 		// Check sha1
-		$sha = Revision::base36Sha1( $params['oldtext'] );
-		if ( $params['oldtext'] ) {
-			if ( $sha1 != $params['sha1'] ) {
-				$this->dieUsage( "sha1 does not match. Submitted: " . $params['revsha1']
-					. "Should have been: $sha1" );
-			}
+		$sha1 = Revision::base36Sha1( $params['oldtext'] );
+		$sha1 = wfBaseConvert( $sha1, 36, 16, 40 );
+		if ( $sha1 !== $params['revsha1'] ) {
+			$this->dieUsage( "sha1 does not match. Submitted: " . $params['revsha1']
+				. "\nShould have been: $sha1" );
 		}
 		$dbw = wfGetDB( DB_MASTER );
 		// See if this data is already in the tables
@@ -63,6 +62,7 @@ class ApiMirrorEditPage extends ApiBase {
 
 	public function doMirrorEdit( $params ) {
 		$dbw = wfGetDB( DB_MASTER );
+		$params['revsha1'] = Revision::base36Sha1( $params['oldtext'] );
 		// See if this page title and namespace are in the page table
 		$conds = array (
 			'page_title' => $params['rctitle'],
@@ -138,6 +138,10 @@ class ApiMirrorEditPage extends ApiBase {
 		$oldId = $dbw->insertId();
 		$pushTimestamp = wfTimestamp( TS_MW );
 		// Insert the mirrored revision
+		// TODO: Add MirrorTools::getContentModel() to ApiMirrorX.php
+		// (not just to ApiMirrorEditPage.php).
+		$params['revcontentmodel']
+			= MirrorTools::getContentModel( $params['revcontentmodel'] );
 		$insertRevisionArray = array(
 			'rev_id' => $params['revid'],
 			'rev_page' => $pageId,
@@ -150,9 +154,9 @@ class ApiMirrorEditPage extends ApiBase {
 			'rev_deleted' => $params['revdeleted'],
 			'rev_len' => $params['revlen'],
 			'rev_parent_id' => $params['rclastoldid'],
-			'rev_sha1' => $params['revsha1'],
+			'rev_sha1' => $sha1,
 			'rev_content_model' => $params['revcontentmodel'],
-			'rev_content_format' => $params['revcontentformat'],
+			#'rev_content_format' => $params['revcontentformat'],
 			'rev_mt_user' => $params['revuser'],
 			'rev_mt_push_timestamp' => $pushTimestamp,
 		);
